@@ -1,0 +1,127 @@
+# dev-ai-standards rules-check (core, Enforcement). Runs on every push and PR, with no path filter.
+# The checks and the manifest come from the base commit, never from the commit under test; this
+# file itself is the branch's copy, so a branch can edit it: detection only, not a boundary.
+# Never use pull_request_target here. Actions are pinned by full commit SHA.
+name: rules-check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rules-check:
+    # The required status context. No other workflow job may use this name (merge check).
+    name: rules-check
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the branch under test (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (same pin as ecf CI)
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The checks below come from the base commit and run as `python <file>`: that works for the
+      # kit's sh-front files (valid Python 3.12) and for older bases' plain Python files alike.
+      # `sh <file>` would need uv and fail on an older base.
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0 (released 2026-10-22)
+        with:
+          python-version: "3.12"
+
+      # The trusted base: a PR's base commit. On a push to the default branch, the commit before
+      # the push (never the pushed commit itself); a forced push there fails. On a push to any
+      # other branch or tag (forced or not), its merge-base with the default branch: the branch's
+      # own earlier push is not trusted. No merge-base, or an unknown `before` on the default
+      # branch, fails.
+      - name: Take checks and manifest from the base commit
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          FORCED: ${{ github.event.forced }}
+          PUSH_REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -eu
+          zero=0000000000000000000000000000000000000000
+          if [ "$EVENT" = "pull_request" ]; then
+            base="$PR_BASE_SHA"
+          elif [ "$PUSH_REF" = "refs/heads/$DEFAULT_BRANCH" ]; then
+            if [ "${FORCED:-false}" = "true" ]; then
+              echo "rules-check: forced push to the default branch ($DEFAULT_BRANCH) is not allowed; restore the old tip, then push the change as new commits"
+              exit 1
+            elif [ -z "$BEFORE" ] || [ "$BEFORE" = "$zero" ]; then
+              base="$AFTER"
+              echo "rules-check: first push: checked against its own manifest only (no earlier commit)"
+            elif ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              echo "rules-check: the commit before this push ($BEFORE) is not in the fetched history: forced push to the default branch ($DEFAULT_BRANCH) is not allowed"
+              exit 1
+            elif ! git merge-base --is-ancestor "$BEFORE" "$AFTER"; then
+              echo "rules-check: the commit before this push ($BEFORE) is not an ancestor of $AFTER: forced push to the default branch ($DEFAULT_BRANCH) is not allowed"
+              exit 1
+            else
+              base="$BEFORE"
+            fi
+          elif base="$(git merge-base "origin/$DEFAULT_BRANCH" "$AFTER" 2>/dev/null)" && [ -n "$base" ]; then
+            echo "rules-check: $PUSH_REF is not the default branch; comparing with its merge-base with origin/$DEFAULT_BRANCH ($base)"
+          else
+            echo "rules-check: $PUSH_REF has no merge-base with origin/$DEFAULT_BRANCH; nothing trusted to compare with"
+            exit 1
+          fi
+          git rev-parse --verify -q "$base^{commit}" >/dev/null || { echo "rules-check: base $base not found"; exit 1; }
+          dest="$RUNNER_TEMP/base"
+          mkdir -p "$dest"
+          git archive "$base" -- docs/standards/checks docs/standards/manifest | tar -x -C "$dest" \
+            || { echo "rules-check: base $base has no docs/standards/checks or manifest"; exit 1; }
+          echo "BASE_STANDARDS=$dest/docs/standards" >> "$GITHUB_ENV"
+          echo "BASE_REF=$base" >> "$GITHUB_ENV"
+
+      - name: trailer_check (pushed commits only)
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          PUSH_REF: ${{ github.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REPO: ${{ github.repository }}
+          # Read-only token: logins and signature status for the Dependabot, web-flow and root exemptions.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if [ "$EVENT" = "pull_request" ]; then
+            python "$BASE_STANDARDS/checks/trailer_check.py" \
+              --range "$PR_BASE_SHA..$PR_HEAD_SHA" --github-repo "$REPO"
+          else
+            python "$BASE_STANDARDS/checks/trailer_check.py" \
+              --push "$BEFORE" "$AFTER" --ref "$PUSH_REF" --base-ref "origin/$DEFAULT_BRANCH" \
+              --github-repo "$REPO"
+          fi
+
+      - name: rules_check
+        # --base: the same trusted base commit; also what a kit upgrade is compared with
+        # (checks/README.md, "Kit upgrades"). DEFAULT_BRANCH: placeholders fail in a pull request
+        # into it or a push to it (an environment variable, so an older base copy ignores it).
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -eu
+          python "$BASE_STANDARDS/checks/rules_check.py" --manifest "$BASE_STANDARDS/manifest" \
+            --base "$BASE_REF" .
+
+      - name: ShellCheck (shell files)
+        # Linting only. "ShellCheck preinstalled on ubuntu runners" is unverified until A4; if it
+        # is missing, this step fails with a clear message rather than skipping. Runs the branch's
+        # own copy of shell_lint.py: detection only, like the rest of this workflow.
+        run: |
+          set -eu
+          if python docs/standards/checks/shell_lint.py --has-zsh . && ! command -v zsh >/dev/null 2>&1; then
+            sudo apt-get update -q && sudo apt-get install -y -q zsh
+          fi
+          python docs/standards/checks/shell_lint.py --all --require .

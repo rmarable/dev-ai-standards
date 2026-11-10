@@ -46,7 +46,7 @@ Each wave ends at an operator checkpoint; approval as in "Scoped approval" (core
 | 2 | A2 build v0.1 (tree below); launcher tested with `--dry-run` and `--local` (Claude may run both). | new repo | none | read-through |
 | 3 | A3 two Opus reviewers; fixes in. A4 pilots. | scratch repos, GitHub | tell (light) | pilot results |
 | 4 | Personal wiring, at peers' step boundaries, each change told to peers first: personal file, links, skill link (v2 `claude-codex-integration` waits for B2), launcher onto PATH, settings snippets without the `permissions.ask` list (it ships in each project's `.claude/settings.json` through `apply`); switches: `claudeInChromeDefaultEnabled: false` in `~/.claude.json` (global config; ignored in `settings.json`, A0 row 22), Claude Docs off (`disableClaudeAiConnectors` or `/mcp`), unused synced skills off (`skillOverrides` with `anthropic-skills:<name>`, or `syncClaudeAiSkills: false`). | `~/.claude`, `~/.codex`, `~/.agents`, `~/.local/bin` | tell first | OK per settings change |
-| 5 | A5: create the private GitHub repo, push, operator turns on its PR ruleset, tag `v0.1`. | GitHub | none | OK for create, push, tag |
+| 5 | A5: create the PUBLIC GitHub repo (operator decision 2026-11-10), re-run the scrub check (no local paths, secrets or personal rules), push, operator turns on its PR ruleset (works on Free for public repos), tag `v0.1`. | GitHub | none | OK for create, push, tag |
 | G | **Gate for Part B:** eval/private merged; the main checkout clean; M1 told. Nothing below starts before this. | none | both | operator confirms |
 | 6 | B1: state file to the new shape, own lines only; ask peers to shorten theirs. | `CLAUDE-STATE.md` | ask both | show what moves |
 | 7 | B2 (below); then tag the kit `v1.0` on the commit ecf adopted. | ecf main | agree slot and OD range; ask before gate | gate, merge OK, CI, OK for `v1.0` tag |
@@ -57,7 +57,7 @@ Each wave ends at an operator checkpoint; approval as in "Scoped approval" (core
 Waves 0 to 5 don't touch ecf and can start now; state-file upkeep under ecf's current rules
 continues meanwhile. ecf's move to PRs is a later plan (Open questions).
 
-## Part A: the standards repo `rmarable/dev-ai-standards` (private)
+## Part A: the standards repo `rmarable/dev-ai-standards` (public; operator decision 2026-11-10)
 
 ```
 core.md                   the one-page core (kit-owned, copied verbatim; at most 600 words by `wc -w core.md`)
@@ -93,7 +93,9 @@ docs/adr/, VERSION, CHANGELOG.md
 - To change a kit rule, a project adds a line naming the block to the one `## Overrides` section
   of `AGENTS.md` (the override wins; `rules_check` lists it) or uses `promote`; never edits a block.
 - Only `apply` writes the hash manifest `docs/standards/manifest`; `drift` and `rules_check` hash
-  kit files and blocks against `main`'s copy.
+  kit files and blocks against `main`'s copy, except in a kit upgrade PR (only kit files, the
+  manifest and a newer Standards line change), which is checked against its own manifest (operator
+  decision 2026-11-10; `checks/README.md`).
 
 **What `core.md` holds.** Exactly the four sections marked "(core)" below: Core, Enforcement,
 Scoped approval, Model use. The cap is `wc -w core.md` <= 600 (Markdown included); kit CI runs it.
@@ -368,7 +370,7 @@ text with the manifest. `promote` opens a PR on the standards repo. Personal pre
   + Python); core-only; one real private repo with the real Codex loop (Codex edits; Claude commits
   and opens the PR; CI green; operator merges), deleted afterwards with OK. The real repo's launch
   is run by the operator in a terminal (remote steps). Run the Verification.
-- **A5.** Private repo, push, ruleset (operator), tag `v0.1`. `v1.0` after ecf's B2 merges, on the
+- **A5.** Public repo (operator decision 2026-11-10: rulesets work on Free, Actions minutes free, teammates clone without access; the personal rules file never enters this repo, it stays in `~/.claude`), scrub check, push, ruleset (operator), tag `v0.1`. `v1.0` after ecf's B2 merges, on the
   kit commit ecf adopted.
 
 ## Part B: bring ecf onto the standards
@@ -452,8 +454,8 @@ merges and its gate throughout (decision 1).
 - Codex: one real loop (Codex edits and `HANDOFF.md`, no git writes; the hook lists the
   uncommitted worktree; `HANDOFF.md` untracked; Claude checks the git dir, commits hooks-off with
   one Codex trailer, pushes with main's hooks; PR merged). A fresh Codex session answers what it
-  may not do, where its handoff goes and its review rule. A core-only repo has no high-stakes or
-  Codex text.
+  may not do, where its handoff goes and its review rule. A core-only repo has no high-stakes
+  text and no Codex add-on block or Codex project lines (K2-8, 2026-11-10).
 - Launcher: Claude runs `--dry-run` (changes nothing) and `--local` (a repo where `drift` reports
   nothing); the remote steps refuse when Claude runs them; a real run by the operator in a terminal
   makes a private repo with the ruleset and green rules-check, and opens Claude.
@@ -465,6 +467,17 @@ merges and its gate throughout (decision 1).
   `git status` clean; `ecf --version` and `ecf-server dev` start. Scratch repos removed (OK).
 
 ## Decisions
+
+Operator decisions 2026-11-10 (uv + multi-user round; detail in `P001-notes/a2/fix2.md`):
+1. uv required, Python 3.9 dropped: every kit entry point and hook runs on uv-managed Python 3.12
+   or later behind a POSIX `sh` front that prints the uv install hint when uv is missing;
+   `bin/bootstrap` checks the Xcode Command Line Tools, git and uv. Supersedes K1-14 (3.9 support).
+2. Multi-user readiness: `apply` writes `scripts/setup` and, if absent, `.github/CODEOWNERS`;
+   `AGENTS.md` has a project-owned `## People` section, and a scoped approval comes from an
+   approver's own message; everyone writes `ADR-NEW`/`OD-NEW`/`P-NEW` on branches and the real
+   number is assigned when merging to `main` (supersedes "Codex writes `P-NEW`" above);
+   `rules_check` fails on a placeholder left on `main` and on deleting or emptying `.githooks/*` or
+   `scripts/setup`.
 
 Operator decisions 2026-11-10 (final, G1 fixes):
 1. `gate-status` (G1-1): the script and its docs-only list are always read from the base branch

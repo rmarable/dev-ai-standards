@@ -1,0 +1,73 @@
+#!/bin/sh
+# bootstrap: checks this computer for what the dev-ai-standards kit needs: the Xcode Command Line
+# Tools (macOS only), git and uv (uv fetches Python 3.12 itself). For anything missing it prints
+# the install command. For uv only, it offers to run `brew install uv` after a y/N question, and
+# only at a terminal outside Claude Code (no CLAUDECODE). It never installs anything else.
+# Exit 0 when everything is present, else 1. POSIX sh, so it runs on a stock Mac.
+
+UV_HINT='brew install uv (or see https://docs.astral.sh/uv/getting-started/installation/)'
+missing=0
+clt=1
+
+if [ "$(uname -s)" = Darwin ]; then
+  if xcode-select -p >/dev/null 2>&1; then
+    echo "bootstrap: ok      Xcode Command Line Tools"
+  else
+    clt=0
+    missing=1
+    echo "bootstrap: MISSING Xcode Command Line Tools: run xcode-select --install"
+  fi
+else
+  echo "bootstrap: skipped Xcode Command Line Tools (not macOS)"
+fi
+
+# Without the Command Line Tools, /usr/bin/git is only a stub that opens an installer: don't run it.
+git_path=$(command -v git 2>/dev/null)
+if [ -z "$git_path" ] || { [ "$git_path" = /usr/bin/git ] && [ "$clt" = 0 ]; }; then
+  missing=1
+  echo "bootstrap: MISSING git: run xcode-select --install (it includes git)"
+else
+  echo "bootstrap: ok      git"
+fi
+
+if command -v uv >/dev/null 2>&1; then
+  echo "bootstrap: ok      uv"
+else
+  echo "bootstrap: MISSING uv: $UV_HINT"
+  if [ -n "${CLAUDECODE:-}" ]; then
+    echo "bootstrap: not offering to install uv under Claude Code (CLAUDECODE is set); run the command yourself"
+    missing=1
+  elif [ ! -t 0 ] || [ ! -t 1 ]; then
+    echo "bootstrap: not offering to install uv: not a terminal; run the command yourself"
+    missing=1
+  elif ! command -v brew >/dev/null 2>&1; then
+    echo "bootstrap: Homebrew not found; install uv from the page above"
+    missing=1
+  else
+    printf 'bootstrap: run "brew install uv" now? [y/N] '
+    read -r answer || answer=
+    case $answer in
+      y | Y | yes | YES)
+        brew install uv
+        hash -r 2>/dev/null
+        if command -v uv >/dev/null 2>&1; then
+          echo "bootstrap: ok      uv (installed)"
+        else
+          echo "bootstrap: uv still not found; open a new terminal or check brew's output"
+          missing=1
+        fi
+        ;;
+      *)
+        echo "bootstrap: uv not installed"
+        missing=1
+        ;;
+    esac
+  fi
+fi
+
+if [ "$missing" = 0 ]; then
+  echo "bootstrap: all present"
+  exit 0
+fi
+echo "bootstrap: install what is MISSING above, then run this again"
+exit 1

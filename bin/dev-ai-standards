@@ -1,0 +1,1256 @@
+#!/bin/sh
+# /// script
+# requires-python = ">=3.12"
+# ///
+""":"
+# sh front (POSIX sh, so it runs on a stock Mac): needs uv, then runs this file as Python >= 3.12.
+# GUI git clients may not pass the shell's PATH, so uv's usual folders are tried too.
+if [ -z "${DEV_AI_STANDARDS_NO_UV_SEARCH-}" ] && ! command -v uv >/dev/null 2>&1; then
+  for d in "$HOME/.local/bin" "$HOME/.cargo/bin" /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "$d/uv" ]; then PATH="$d:$PATH"; export PATH; break; fi
+  done
+fi
+if ! command -v uv >/dev/null 2>&1; then
+  printf '%s %s\n' 'uv is required: brew install uv' \
+    '(or see https://docs.astral.sh/uv/getting-started/installation/)' >&2
+  exit 1
+fi
+# A user-level UV_PYTHON would override requires-python above.
+unset UV_PYTHON
+exec uv run --script "$0" "$@"
+":
+dev-ai-standards: apply the kit to a project, report drift, or print a promote command.
+
+Implements P001 Part A, "How projects take it up" and "Kit-owned and project-owned text":
+the single source for apply. Kit text is copied (never linked); project-owned text is never
+overwritten.
+"""
+
+import argparse
+import datetime
+import difflib
+import importlib.util
+import json
+import os
+import re
+import shlex
+import stat
+import subprocess
+import sys
+from collections.abc import Callable
+from pathlib import Path
+
+KIT = Path(__file__).resolve().parent.parent
+KIT_REPO = "rmarable/dev-ai-standards"
+
+
+def _load_rules_check():
+    sys.dont_write_bytecode = True
+    path = KIT / "checks" / "rules_check.py"
+    if not path.is_file():
+        sys.exit(f"dev-ai-standards: kit is incomplete: {path} missing")
+    spec = importlib.util.spec_from_file_location("rules_check", path)
+    if spec is None or spec.loader is None:
+        sys.exit(f"dev-ai-standards: can't load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+rc = _load_rules_check()
+
+# Templates apply reads (names from W2's templates). A missing required one fails clearly.
+T_AGENTS = "templates/AGENTS.md"
+T_CLAUDE = "templates/CLAUDE.md"
+T_CHANGELOG = "templates/CHANGELOG.md"
+T_GITIGNORE = "templates/gitignore"
+T_GITATTRIBUTES = "templates/gitattributes"
+T_CI = "templates/ci/rules-check.yml"
+REQUIRED_TEMPLATES = (T_AGENTS, T_CLAUDE, T_CHANGELOG, T_GITIGNORE, T_GITATTRIBUTES, T_CI)
+# Optional templates written into the project only when the target path doesn't exist.
+IF_ABSENT_TREES = {"templates/docs": "docs", "templates/planning-docs": "planning-docs"}
+# The state-file template's name doesn't match any agent-file ignore line (`CLAUDE-STATE.md`), so
+# a project's own ignore can't hide the kit copy under docs/standards/templates/ (F1-3).
+IF_ABSENT_FILES = {"templates/CLAUDE-STATE.template.md": "CLAUDE-STATE.md"}
+# The project's scripts/check (K2-2): written once, executable, project-owned afterwards.
+T_SCRIPTS_CHECK = "templates/scripts/check"
+# The project's scripts/setup (operator decision 2026-11-10, multi-user): a newcomer runs it once
+# after cloning. Written once, executable, project-owned afterwards; rules_check flags deleting it.
+T_SCRIPTS_SETUP = "templates/scripts/setup"
+# .github/CODEOWNERS (same decision): written only when absent, project-owned.
+T_CODEOWNERS = "templates/CODEOWNERS"
+CODEOWNERS = ".github/CODEOWNERS"
+# A GitHub login: letters, digits and single hyphens, at most 39 characters.
+LOGIN_RE = re.compile(r"[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}")
+PEOPLE_HEADING = "## People"
+# Python stack only (G2): written when the project has no Ruff settings of its own.
+T_RUFF = "templates/ruff.toml"
+# Python stack only (G5): test CI, written once to .github/workflows/python.yml.
+T_PYTHON_CI = "templates/ci/python.yml"
+PYTHON_CI = ".github/workflows/python.yml"
+# Python stack only (A4 pilot fix): a virtual uv project, written when there is no pyproject.toml,
+# so python.yml's `uv sync --locked` has a project to sync.
+T_PYPROJECT = "templates/pyproject.toml"
+DEFAULT_PYTHON_MIN = 12
+DEFAULT_PYTHON_LATEST = 13
+# Templates rendered into the project but never copied verbatim into docs/standards/: an
+# unrendered {{python_target}} would break every Ruff run that walks docs/standards/.
+NOT_COPIED = {T_RUFF, T_PYPROJECT, T_CODEOWNERS}
+GITIGNORE_HEADER = "# dev-ai-standards"
+SNIPPET_CLAUDE = "snippets/claude-settings.json"
+SNIPPET_CODEX = "snippets/codex-config.toml"
+SETTINGS_KEYS = ("env", "attribution", "permissions")
+STATE_RULE = rc.STATE_RULE
+STATE_LOADER = "CLAUDE.local.md"
+# `paths` has no exclusion form we have verified, so the docs/standards/ exception is in the body.
+USER_DOCS_RULE_TEXT = (
+    '---\npaths: ["README.md", "docs/**"]\n---\n\n# User docs\n\n'
+    "Before editing README.md or a file under docs/, read `docs/standards/refs/user-docs.md`;"
+    " its rules bind as if they were here. Not for `docs/standards/**`: those are kit copies,"
+    " changed only by a kit upgrade.\n"
+)
+
+# Every project gets state-file, planning and multi-session (kit README, W2 templates).
+ALWAYS_ADDONS = ("state-file", "planning", "multi-session")
+ALWAYS = [
+    "core.md",
+    "refs/honesty.md",
+    "refs/outside-sources.md",
+    "refs/user-docs.md",
+    "checks/README.md",
+    "checks/rules_check.py",
+    "checks/trailer_check.py",
+    "checks/state_check.py",
+    "checks/secret_scan.py",
+    "checks/shell_lint.py",
+    "checks/pre_commit.py",
+    "bin/bootstrap",
+    "addons/state-file.md",
+    "addons/planning.md",
+    "addons/multi-session.md",
+    SNIPPET_CLAUDE,
+]
+HIGH_STAKES = ["addons/high-stakes.md", "refs/diff-review.md", "bin/gate-status"]
+CODEX = ["addons/codex.md", SNIPPET_CODEX]
+STACKS = ("python", "iac", "other")
+BLOCK_ORDER = rc.BLOCK_NAMES
+DOCS_ONLY_LIST = ".github/docs-only-paths"
+DOCS_ONLY_DEFAULT = (
+    "# Docs-only path prefixes for bin/gate-status. Project-owned; prefixes, never extensions.\n"
+    "# Read from the base branch only. Never list code, tests, prompts, eval data or any file a"
+    " test reads.\n"
+    "planning-docs/\n"
+    "docs/adr/\n"
+)
+HOOKS_DIR = ".githooks"
+TRAILER_CHECK = "docs/standards/checks/trailer_check.py"
+PRE_COMMIT_CHECK = "docs/standards/checks/pre_commit.py"
+# Hooks run each check through its sh front (`sh <file>`): it needs uv and runs the file on
+# uv-managed Python >= 3.12 (operator decision 2026-11-10). Kit files lose their mode bits when
+# copied, so the hooks name `sh` rather than relying on the executable bit.
+HOOK_LINE = f'sh {TRAILER_CHECK} --message-file "$1" || exit 1'
+HOOK_SCRIPT = (
+    "#!/bin/sh\n"
+    "# dev-ai-standards: exactly one allowed co-author trailer (docs/standards/checks/README.md).\n"
+    "# Git runs hooks from the top of the work tree. A reminder, not a boundary (--no-verify"
+    " skips it).\n"
+    f'exec sh {TRAILER_CHECK} --message-file "$1"\n'
+)
+PRE_COMMIT_LINE = f"sh {PRE_COMMIT_CHECK} || exit 1"
+PRE_COMMIT_SCRIPT = (
+    "#!/bin/sh\n"
+    "# dev-ai-standards: staged-file checks only (ruff, secret scan, ShellCheck, rules_check on"
+    " kit\n"
+    "# paths, state_check warning); never tests. A convenience, not a boundary: --no-verify"
+    " skips it,\n"
+    '# CI is the check (docs/standards/checks/README.md, "Hook mechanics").\n'
+    f"exec sh {PRE_COMMIT_CHECK}\n"
+)
+# Kit hooks: name -> (script, line to add to an existing hook).
+KIT_HOOKS = {
+    "commit-msg": (HOOK_SCRIPT, HOOK_LINE),
+    "pre-commit": (PRE_COMMIT_SCRIPT, PRE_COMMIT_LINE),
+}
+# The python3 forms earlier kit versions wrote. The checks now need Python 3.12, which a stock
+# Mac's python3 is not, so apply rewrites these (and replaces the old settings commands).
+LEGACY_HOOKS = {
+    name: script.replace("exec sh ", "exec python3 ") for name, (script, _) in KIT_HOOKS.items()
+}
+LEGACY_LINE = "python3 docs/standards/checks/"
+# Claude Code hooks apply merges into .claude/settings.json (K2-1; shape: checks/README.md).
+STATE_HOOK_CMD = 'sh "$CLAUDE_PROJECT_DIR"/docs/standards/checks/state_check.py --hook {}'
+LEGACY_STATE_HOOK_CMDS = {
+    STATE_HOOK_CMD.replace("sh ", "python3 ", 1).format(e)
+    for e in ("post-tool-use", "session-start")
+}
+CLAUDE_HOOKS = {
+    "PostToolUse": {
+        "matcher": "Edit|Write",
+        "hooks": [
+            {
+                "type": "command",
+                "if": "Edit(**/CLAUDE-STATE.md)",
+                "command": STATE_HOOK_CMD.format("post-tool-use"),
+            }
+        ],
+    },
+    "SessionStart": {
+        "hooks": [{"type": "command", "command": STATE_HOOK_CMD.format("session-start")}]
+    },
+}
+IF_RE = re.compile(r"<!-- if ([a-z-]+) -->")
+ENDIF = "<!-- endif -->"
+PLACEHOLDER_RE = re.compile(r"(?<!\$)\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
+
+
+class ApplyError(Exception):
+    pass
+
+
+def q(value: object) -> str:
+    """Shell-quote a value for a command printed for a person to copy (K1-10)."""
+    return shlex.quote(str(value))
+
+
+def kit_file(rel: str, what: str = "kit file") -> Path:
+    p = KIT / rel
+    if not p.is_file():
+        raise ApplyError(f"{what} missing from the kit: {rel}")
+    return p
+
+
+def kit_version() -> str:
+    v = kit_file("VERSION").read_text().strip().removeprefix("v")
+    if not re.fullmatch(r"\d+\.\d+(\.\d+)?(-[0-9A-Za-z.]+)?", v):
+        raise ApplyError(f"kit VERSION '{v}' is not a version number")
+    return v
+
+
+def norm_block(body: str) -> str:
+    return "\n" + body.strip("\n") + "\n"
+
+
+def section(text: str, heading: str) -> str | None:
+    """Body of the '## ' section whose heading line starts with `heading`, or None."""
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        if ln.startswith(heading):
+            body: list[str] = []
+            for nxt in lines[i + 1 :]:
+                if nxt.startswith("## ") or nxt.startswith("# "):
+                    break
+                body.append(nxt)
+            joined = "\n".join(body).strip("\n")
+            return joined or None
+    return None
+
+
+def source_file(name: str) -> str:
+    return f"stacks/{name}.md" if name in STACKS else f"addons/{name}.md"
+
+
+def block_text(fname: str, name: str, template_blocks: dict[str, str]) -> str | None:
+    """Kit text for block `name` in AGENTS.md or CLAUDE.md; None when the kit has none."""
+    if fname == "AGENTS.md" and name == "core":
+        return norm_block(kit_file("core.md").read_text())
+    src = KIT / source_file(name)
+    if src.is_file():
+        heading = (
+            f"## Always loaded (`AGENTS.md` block `{name}`)"
+            if fname == "AGENTS.md"
+            else "## Claude only (`CLAUDE.md`)"
+        )
+        body = section(src.read_text(), heading)
+        if body:
+            return norm_block(body)
+    if template_blocks.get(name, "").strip():
+        return norm_block(template_blocks[name])
+    return None
+
+
+def apply_conditionals(text: str, chosen: set[str], where: str) -> str:
+    """Keep '<!-- if X -->' ... '<!-- endif -->' parts only for chosen names; drop the guards."""
+    valid = set(BLOCK_ORDER) | {"pr", "no-pr"}
+    out: list[str] = []
+    keep: bool | None = None
+    for n, ln in enumerate(text.splitlines(keepends=True), 1):
+        m = IF_RE.fullmatch(ln.strip())
+        if m:
+            if keep is not None:
+                raise ApplyError(f"{where} line {n}: nested '<!-- if -->'")
+            if m.group(1) not in valid:
+                raise ApplyError(f"{where} line {n}: unknown condition '{m.group(1)}'")
+            keep = m.group(1) in chosen
+            continue
+        if ln.strip() == ENDIF:
+            if keep is None:
+                raise ApplyError(f"{where} line {n}: '<!-- endif -->' without '<!-- if -->'")
+            keep = None
+            continue
+        if keep is None or keep:
+            out.append(ln)
+    if keep is not None:
+        raise ApplyError(f"{where}: '<!-- if -->' without '<!-- endif -->'")
+    return "".join(out)
+
+
+def fill_placeholders(text: str, values: dict[str, str], where: str) -> str:
+    def sub(m: re.Match[str]) -> str:
+        if m.group(1) not in values:
+            raise ApplyError(f"{where}: unknown placeholder {{{{{m.group(1)}}}}}")
+        return values[m.group(1)]
+
+    return PLACEHOLDER_RE.sub(sub, text)
+
+
+def render_template(rel: str, chosen: set[str], values: dict[str, str]) -> str:
+    return fill_placeholders(
+        apply_conditionals(kit_file(rel, "template").read_text(), chosen, rel), values, rel
+    )
+
+
+def choices_text(high: bool, codex: bool, stack: str, no_pr: bool) -> str:
+    parts = "core" + (", high-stakes" if high else "") + (", codex" if codex else "")
+    return f"{parts}; stack {stack}{'; no-pr' if no_pr else ''}"
+
+
+def set_standards_line(text: str, line: str) -> str:
+    """Replace the kit's own Standards line; a project line starting 'Standards:' stays (K1-7)."""
+    lines = text.split("\n")
+    for i, ln in enumerate(lines):
+        if ln.startswith("Standards: dev-ai-standards v"):
+            lines[i] = line
+            return "\n".join(lines)
+    for i, ln in enumerate(lines):
+        if ln.startswith("# "):
+            lines[i + 1 : i + 1] = ["", line]
+            return "\n".join(lines)
+    return line + "\n\n" + text
+
+
+def render_blocks(text: str, wanted: dict[str, str], anchor_after_standards: bool) -> str:  # noqa: PLR0912 (one linear command flow)
+    """Replace, add or remove kit blocks; project text outside blocks is untouched."""
+    for name, start, cs, ce, end in reversed(rc.parse_blocks(text)):
+        if name in wanted:
+            text = text[:cs] + wanted[name] + text[ce:]
+        else:
+            tail = end
+            while tail < len(text) and text[tail] == "\n" and tail - end < 2:
+                tail += 1
+            text = text[:start] + text[tail:]
+    present = {b[0] for b in rc.parse_blocks(text)}
+    missing = [n for n in BLOCK_ORDER if n in wanted and n not in present]
+    # The codex block goes first, above every other block (Codex reads top down; K2-10).
+    first = [n for n in missing if n == "codex"]
+    rest = [n for n in missing if n != "codex"]
+    for group, at_top in ((first, True), (rest, False)):
+        if not group:
+            continue
+        blocks = rc.parse_blocks(text)
+        std = (
+            re.search(r"^Standards: dev-ai-standards v.*$", text, re.MULTILINE)
+            if anchor_after_standards
+            else None
+        )
+        if at_top and std:
+            pos = std.end()
+        elif at_top and blocks:
+            pos = blocks[0][1]
+        elif blocks:
+            pos = blocks[-1][4]
+        elif std:
+            pos = std.end()
+        else:
+            text = text.rstrip("\n")
+            pos = len(text)
+        new = "".join(f"\n\n{rc.begin_marker(n)}{wanted[n]}{rc.end_marker(n)}" for n in group)
+        if at_top and not std and blocks:
+            new = new.lstrip("\n") + "\n\n"
+        if pos >= len(text):
+            new += "\n"
+        text = text[:pos] + new + text[pos:]
+    if not text.endswith("\n"):
+        text += "\n"
+    return text
+
+
+def selected_files(high: bool, codex: bool, stack: str) -> list[str]:
+    files = list(ALWAYS)
+    tdir = KIT / "templates"
+    if not tdir.is_dir():
+        raise ApplyError("kit templates/ folder missing")
+    files += sorted(
+        rel
+        for rel in (
+            p.relative_to(KIT).as_posix()
+            for p in tdir.rglob("*")
+            if p.is_file() and "__pycache__" not in p.parts
+        )
+        if rel not in NOT_COPIED
+    )
+    if high:
+        files += HIGH_STAKES
+    if codex:
+        files += CODEX
+    files.append(f"stacks/{stack}.md")
+    return list(dict.fromkeys(files))
+
+
+class Plan:
+    """Writes and removals, collected first so --dry-run shows them without touching anything."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.writes: list[tuple[str, bytes, str]] = []
+        self.removes: list[str] = []
+        self.notes: list[str] = []
+        self.actions: list[tuple[str, Callable[[], None]]] = []
+        self.executable: set[str] = set()
+
+    def write(self, rel: str, data: bytes, why: str) -> None:
+        p = self.root / rel
+        if p.is_file() and p.read_bytes() == data:
+            return
+        self.writes.append((rel, data, why))
+
+    def write_if_absent(self, rel: str, data: bytes, why: str) -> bool:
+        if not (self.root / rel).exists():
+            self.write(rel, data, why)
+            return True
+        return False
+
+    def show(self, dry: bool) -> None:
+        verb = "would " if dry else ""
+        for rel, _, why in self.writes:
+            print(f"{verb}write {rel} ({why})")
+        for rel in self.removes:
+            print(f"{verb}remove {rel} (kit file no longer selected)")
+        for what, _ in self.actions:
+            print(f"{verb}{what}")
+        for n in self.notes:
+            print(f"note: {n}")
+
+    def run(self) -> None:
+        for rel, data, _ in self.writes:
+            p = self.root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+            if rel in self.executable:
+                p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        for rel in self.removes:
+            p = self.root / rel
+            if p.is_file():
+                p.unlink()
+        for _, act in self.actions:
+            act()
+
+
+def add_lines(existing: str, lines: list[str]) -> str | None:
+    have = set(existing.splitlines())
+    new = [ln for ln in lines if ln not in have]
+    if not new:
+        return None
+    sep = "" if not existing or existing.endswith("\n") else "\n"
+    return existing + sep + "\n".join(new) + "\n"
+
+
+def merge_settings(plan: Plan) -> None:  # noqa: PLR0912 (one linear command flow)
+    """Add the snippet's env, attribution, permissions.ask and the state_check hooks to
+    .claude/settings.json; never replace a value."""
+    try:
+        snippet = json.loads(kit_file(SNIPPET_CLAUDE).read_text())
+        ask = snippet["permissions"]["ask"]
+        if not isinstance(ask, list):
+            raise TypeError
+    except (ValueError, KeyError, TypeError):
+        raise ApplyError(f"{SNIPPET_CLAUDE} has no permissions.ask list") from None
+    sp = plan.root / ".claude" / "settings.json"
+    try:
+        settings = json.loads(sp.read_text()) if sp.is_file() else {}
+    except ValueError:
+        raise ApplyError(".claude/settings.json is not valid JSON; fix it first") from None
+    if not isinstance(settings, dict):
+        raise ApplyError(".claude/settings.json is not a JSON object; fix it first")
+    changed: list[str] = []
+    for key in (*SETTINGS_KEYS, "hooks"):
+        cur = settings.get(key)
+        if cur is not None and not isinstance(cur, dict):
+            raise ApplyError(f".claude/settings.json '{key}' is not an object; fix it first")
+    perms = settings.get("permissions") or {}
+    if not isinstance(perms.get("ask", []), list):
+        raise ApplyError(".claude/settings.json 'permissions.ask' is not a list; fix it first")
+    for key in SETTINGS_KEYS:
+        if key not in snippet or key == "permissions":
+            continue
+        cur = settings.setdefault(key, {})
+        for k, v in snippet[key].items():
+            if k not in cur:
+                cur[k] = v
+                changed.append(f"{key}.{k}")
+            elif cur[k] != v:
+                plan.notes.append(
+                    f".claude/settings.json {key}.{k} differs from the kit snippet; left as is"
+                )
+    cur_ask = settings.setdefault("permissions", {}).setdefault("ask", [])
+    added = [a for a in ask if a not in cur_ask]
+    cur_ask.extend(added)
+    if added:
+        changed.append(f"{len(added)} permissions.ask pattern(s)")
+    hooks = settings.setdefault("hooks", {})
+    for event, entry in CLAUDE_HOOKS.items():
+        cur_list = hooks.setdefault(event, [])
+        if not isinstance(cur_list, list):
+            raise ApplyError(f".claude/settings.json 'hooks.{event}' is not a list; fix it first")
+        if drop_legacy_hooks(cur_list):
+            changed.append(f"hooks.{event} (python3 state_check command removed)")
+        cmd = entry["hooks"][0]["command"]  # type: ignore[index]
+        have = any(
+            isinstance(e, dict)
+            and any(isinstance(h, dict) and h.get("command") == cmd for h in e.get("hooks") or [])
+            for e in cur_list
+        )
+        if not have:
+            cur_list.append(entry)
+            changed.append(f"hooks.{event} (state_check)")
+    if changed:
+        plan.write(
+            ".claude/settings.json",
+            (json.dumps(settings, indent=2) + "\n").encode(),
+            ", ".join(changed),
+        )
+
+
+def drop_legacy_hooks(entries: list[object]) -> bool:
+    """Remove the python3 state_check commands an earlier apply wrote; True when any went."""
+    dropped = False
+    for e in list(entries):
+        if not isinstance(e, dict) or not isinstance(e.get("hooks"), list):
+            continue
+        keep = [
+            h
+            for h in e["hooks"]
+            if not (isinstance(h, dict) and h.get("command") in LEGACY_STATE_HOOK_CMDS)
+        ]
+        if len(keep) != len(e["hooks"]):
+            dropped = True
+            if keep:
+                e["hooks"] = keep
+            else:
+                entries.remove(e)
+    return dropped
+
+
+def plan_hook(plan: Plan) -> None:
+    """Install the commit-msg and pre-commit hooks in a fresh repo; else print the lines to add.
+
+    Installs only when git has no core.hooksPath, there is no .githooks/ folder, and the default
+    hooks folder holds no hook of its own (setting core.hooksPath would silently switch those off).
+    """
+    root = plan.root
+    if not rc.is_git_repo(root):
+        plan.notes.append(
+            "hook: not a git repository; commit-msg hook not installed (run apply again after"
+            " 'git init')"
+        )
+        return
+    top = rc.git(root, "rev-parse", "--show-toplevel", check=False).stdout.strip()
+    if not top or Path(top).resolve() != root:
+        plan.notes.append(
+            f"hook: {root} is not the top of its git work tree; commit-msg hook not installed"
+        )
+        return
+    hooks_path = rc.git(root, "config", "--get", "core.hooksPath", check=False).stdout.strip()
+    githooks = root / HOOKS_DIR
+    # A .githooks/ folder holding only kit hooks (an earlier apply) is the kit's: fill in the rest.
+    ours = (
+        hooks_path == HOOKS_DIR
+        and githooks.is_dir()
+        and all(
+            p.is_file()
+            and p.name in KIT_HOOKS
+            and p.read_text() in (KIT_HOOKS[p.name][0], LEGACY_HOOKS[p.name])
+            for p in githooks.iterdir()
+        )
+    )
+    if ours:
+        todo = [
+            n
+            for n in KIT_HOOKS
+            if not (githooks / n).is_file() or (githooks / n).read_text() != KIT_HOOKS[n][0]
+        ]
+        if not todo:
+            print(
+                "hook: commit-msg and pre-commit already installed (.githooks/, core.hooksPath"
+                " .githooks)"
+            )
+            return
+        plan.actions.append(
+            (
+                f"install {', '.join(f'{HOOKS_DIR}/{n}' for n in todo)}",
+                lambda: write_hooks(githooks, todo),
+            )
+        )
+        return
+    default_dir = rc.git(root, "rev-parse", "--git-path", "hooks", check=False).stdout.strip()
+    default_hooks = root / default_dir if default_dir else None
+    own_default = sorted(
+        p.name
+        for p in (default_hooks.iterdir() if default_hooks and default_hooks.is_dir() else [])
+        if p.is_file() and not p.name.endswith(".sample")
+    )
+    if hooks_path or githooks.exists() or own_default:
+        if hooks_path:
+            where = f"core.hooksPath is '{hooks_path}'"
+            target = f"{hooks_path.rstrip('/')}/commit-msg"
+        elif githooks.exists():
+            where = f"{HOOKS_DIR}/ exists"
+            target = f"{HOOKS_DIR}/commit-msg"
+        else:
+            where = f"{default_dir}/ has hooks ({', '.join(own_default)})"
+            target = f"{default_dir}/commit-msg"
+        folder = target.rsplit("/", 1)[0]
+        print(f"hook: existing hooks ({where}); nothing changed. Add these lines:")
+        for name, (_, line) in KIT_HOOKS.items():
+            print(f"  to {folder}/{name}: {line}")
+        hook_dir = root / folder
+        old = sorted(
+            h.name
+            for h in (hook_dir.iterdir() if hook_dir.is_dir() else [])
+            if h.is_file() and LEGACY_LINE in h.read_text(errors="replace")
+        )
+        if old:
+            plan.notes.append(
+                f"hook: {folder}/ {', '.join(old)} still run(s) the checks with python3; the"
+                " checks now need Python 3.12 through uv: use the 'sh' lines above instead"
+            )
+        kit_hooks_here = githooks.is_dir() and any(
+            (githooks / n).is_file() and "docs/standards/checks/" in (githooks / n).read_text()
+            for n in KIT_HOOKS
+        )
+        if not hooks_path and kit_hooks_here and not own_default:
+            plan.notes.append(
+                "hook: .githooks/ is in the repo but core.hooksPath is not set in this clone;"
+                " run scripts/setup"
+            )
+        return
+
+    def install() -> None:
+        write_hooks(githooks, list(KIT_HOOKS))
+        r = rc.git(root, "config", "core.hooksPath", HOOKS_DIR, check=False)
+        if r.returncode != 0:
+            raise ApplyError(
+                f"hooks written, but 'git config core.hooksPath {HOOKS_DIR}' failed:"
+                f" {r.stderr.strip()[:200]};"
+                f" run it by hand"
+            )
+
+    plan.actions.append(
+        (
+            f"install {HOOKS_DIR}/commit-msg (runs {TRAILER_CHECK}) and {HOOKS_DIR}/pre-commit"
+            " (runs"
+            f" {PRE_COMMIT_CHECK}), and set core.hooksPath {HOOKS_DIR}",
+            install,
+        )
+    )
+
+
+def write_hooks(githooks: Path, names: list[str]) -> None:
+    githooks.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        hook = githooks / name
+        hook.write_text(KIT_HOOKS[name][0])
+        hook.chmod(hook.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def python_minor(root: Path) -> int | None:
+    """The first 3.N pyproject's requires-python names, or None."""
+    pp = root / "pyproject.toml"
+    if pp.is_file():
+        m = re.search(r"(?m)^\s*requires-python\s*=\s*[\"']([^\"']*)[\"']", pp.read_text())
+        if m:
+            v = re.search(r"3\.(\d+)", m.group(1))
+            if v:
+                return int(v.group(1))
+    return None
+
+
+def python_target(root: Path) -> str:
+    """Ruff target from pyproject's requires-python (first 3.N it names), else py312 (G2)."""
+    return f"py3{python_minor(root) or 12}"
+
+
+def python_versions(root: Path) -> tuple[str, str]:
+    """(python_min, python_latest) for the test CI matrix (G5): requires-python's 3.N, else
+    3.12; latest 3.13, or the minimum when that is newer."""
+    low = python_minor(root) or DEFAULT_PYTHON_MIN
+    return f"3.{low}", f"3.{max(low, DEFAULT_PYTHON_LATEST)}"
+
+
+def render_python_ci(chosen: set[str], values: dict[str, str]) -> str:
+    """The python test workflow; one matrix entry when the two versions are equal (G5)."""
+    text = render_template(T_PYTHON_CI, chosen, values)
+    pair = f'["{values["python_min"]}", "{values["python_latest"]}"]'
+    if values["python_min"] == values["python_latest"]:
+        text = text.replace(pair, f'["{values["python_min"]}"]')
+    return text
+
+
+def project_name(name: str) -> str:
+    """A [project] name from a directory name: lowercase, runs of '-', '_', '.' as one '-'."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def ruff_settings(root: Path) -> str | None:
+    """Where the project already keeps Ruff settings, or None."""
+    for name in ("ruff.toml", ".ruff.toml"):
+        if (root / name).exists():
+            return name
+    pp = root / "pyproject.toml"
+    if pp.is_file() and re.search(r"(?m)^\[tool\.ruff", pp.read_text()):
+        return "pyproject.toml [tool.ruff]"
+    return None
+
+
+def git_common_dir(root: Path) -> Path | None:
+    """The repository's shared git directory, also from a linked worktree (K2-11)."""
+    if not rc.is_git_repo(root):
+        return None
+    r = rc.git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", check=False)
+    return Path(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
+
+
+def gitignore_lines(chosen: set[str], values: dict[str, str], stack: str) -> tuple[str, list[str]]:
+    """(text for a new .gitignore, pattern lines to merge into an existing one) (G1)."""
+    parts = [render_template(T_GITIGNORE, chosen, values)]
+    stack_tmpl = f"templates/gitignore-{stack}"
+    if (KIT / stack_tmpl).is_file():
+        parts.append(render_template(stack_tmpl, chosen, values))
+    text = "\n".join(p.rstrip("\n") + "\n" for p in parts)
+    patterns = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    return text, patterns
+
+
+def merge_gitignore(plan: Plan, text: str, patterns: list[str]) -> None:
+    """Append-only: add missing lines under one header; never remove, reorder or duplicate."""
+    cur = plan.root / ".gitignore"
+    if not cur.is_file():
+        plan.write(".gitignore", text.encode(), "from template")
+        return
+    existing = cur.read_text()
+    have = {ln.strip() for ln in existing.splitlines()}
+    missing = list(dict.fromkeys(p for p in patterns if p.strip() not in have))
+    if not missing:
+        return
+    sep = "" if not existing or existing.endswith("\n") else "\n"
+    block = ("\n" if existing.strip() else "") + GITIGNORE_HEADER + "\n" + "\n".join(missing) + "\n"
+    plan.write(".gitignore", (existing + sep + block).encode(), f"{len(missing)} line(s) added")
+    plan.notes.append(".gitignore: lines added: " + ", ".join(missing))
+
+
+def resolve_owner(root: Path, given: str | None) -> tuple[str, str]:
+    """(owner, where it came from): --owner, else NEW_CLAUDE_PROJECT_OWNER, else git config
+    user.name, else "operator"."""
+    if given:
+        return given, "--owner"
+    env = os.environ.get("NEW_CLAUDE_PROJECT_OWNER", "").strip()
+    if env:
+        return env, "NEW_CLAUDE_PROJECT_OWNER"
+    r = subprocess.run(
+        ["git", "config", "--get", "user.name"],
+        cwd=root if root.is_dir() else None,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if r.returncode == 0 and r.stdout.strip():
+        return r.stdout.strip(), "git config user.name"
+    return "operator", "default"
+
+
+def codeowners_rule(owner: str, owner_from: str) -> str:
+    """The CODEOWNERS catch-all line; commented out when the owner is the "operator" default or
+    isn't shaped like a GitHub login."""
+    if owner_from != "default" and LOGIN_RE.fullmatch(owner):
+        return f"* @{owner}"
+    return "# * @<github-login>  (owner unknown: put your GitHub login here and remove the '#')"
+
+
+def add_people(text: str, template_text: str) -> str:
+    """Add the template's '## People' section to an AGENTS.md that has none, before
+    '## Project' (or '## Overrides', or at the end). Project-owned once written."""
+    if any(ln.rstrip() == PEOPLE_HEADING for ln in text.splitlines()):
+        return text
+    body = section(template_text, PEOPLE_HEADING)
+    if body is None:
+        return text
+    block = [PEOPLE_HEADING, "", *body.split("\n"), ""]
+    lines = text.split("\n")
+    for heading in ("## Project", "## Overrides"):
+        idx = next((i for i, ln in enumerate(lines) if ln.rstrip() == heading), None)
+        if idx is not None:
+            lines[idx:idx] = block
+            return "\n".join(lines)
+    return text.rstrip("\n") + "\n\n" + "\n".join(block)
+
+
+def add_kit_rows(text: str, template_text: str, manifest: dict[str, str]) -> str:  # noqa: PLR0912 (one linear command flow)
+    """Add each missing kit row to the read-before table, from the rendered template (K2-3)."""
+    missing = rc.missing_kit_rows(text, manifest)
+    if not missing:
+        return text
+    rows: dict[str, str] = {}
+    for ln in template_text.splitlines():
+        if ln.strip().startswith("|"):
+            for path in missing:
+                if f"`{path}`" in ln:
+                    rows.setdefault(path, ln)
+    add = [rows[path] for path in missing if path in rows]
+    if not add:
+        return text
+    lines = text.split("\n")
+    last: int | None = None
+    in_table = False
+    header_ok = False
+    for i, ln in enumerate(lines):
+        st = ln.strip()
+        if st.startswith("|"):
+            if not in_table:
+                in_table = True
+                header_ok = "read" in [c.strip().lower() for c in st.strip("|").split("|")]
+            if header_ok:
+                last = i
+        else:
+            if in_table and header_ok:
+                break
+            in_table = False
+    if last is not None:
+        lines[last + 1 : last + 1] = add
+        return "\n".join(lines)
+    section = ["## Read before you do these", "", "| Before you… | Read |", "|---|---|", *add, ""]
+    idx = next((i for i, ln in enumerate(lines) if ln.rstrip() == "## Overrides"), None)
+    if idx is None:
+        return text.rstrip("\n") + "\n\n" + "\n".join(section)
+    lines[idx:idx] = section
+    return "\n".join(lines)
+
+
+def cmd_apply(args: argparse.Namespace) -> int:  # noqa: PLR0912, PLR0915 (one linear command flow)
+    root = Path(args.dir).resolve()
+    for a in args.addon or []:
+        for name in a.split(","):
+            if name.strip() not in ALWAYS_ADDONS:
+                raise ApplyError(
+                    f"unknown add-on '{name.strip()}' (every project gets"
+                    f" {', '.join(ALWAYS_ADDONS)})"
+                )
+    for rel in REQUIRED_TEMPLATES:
+        kit_file(rel, "template")
+    version = kit_version()
+    plan = Plan(root)
+
+    names = ["core"]
+    if args.high_stakes:
+        names.append("high-stakes")
+    if args.codex:
+        names.append("codex")
+    names += [*list(ALWAYS_ADDONS), args.stack]
+    chosen = set(names) | {"no-pr" if args.no_pr else "pr"}
+    choices = choices_text(args.high_stakes, args.codex, args.stack, args.no_pr)
+    today = datetime.date.today().isoformat()
+    owner, owner_from = resolve_owner(root, args.owner)
+    values = {
+        "version": version,
+        "choices": choices,
+        "name": args.name or root.name,
+        "owner": owner,
+        "codeowners_rule": codeowners_rule(owner, owner_from),
+        "date": today,
+        "tier": "high-stakes" if args.high_stakes else "core",
+        "id": "M1",
+        "title": args.name or root.name,
+        "python_target": python_target(root),
+        "python_min": python_versions(root)[0],
+        "python_latest": python_versions(root)[1],
+        "project_name": project_name(root.name),
+    }
+
+    old_manifest: dict[str, str] = {}
+    mpath = root / rc.MANIFEST_PATH
+    if mpath.is_file():
+        old_manifest = rc.parse_manifest(mpath.read_text())
+
+    manifest: dict[str, str] = {}
+    for rel in selected_files(args.high_stakes, args.codex, args.stack):
+        data = kit_file(rel).read_bytes()
+        dest = f"{rc.STANDARDS_DIR}/{rel}"
+        cur = root / dest
+        if (
+            cur.is_file()
+            and cur.read_bytes() != data
+            and old_manifest.get(dest) != rc.sha256_bytes(cur.read_bytes())
+        ):
+            plan.notes.append(
+                f"{dest} was edited in the project; the kit copy replaces it (use Overrides or"
+                " promote)"
+            )
+        plan.write(dest, data, "kit file")
+        manifest[dest] = rc.sha256_bytes(data)
+
+    rule_body = section(kit_file("addons/state-file.md").read_text(), "## Path rule")
+    if rule_body is None:
+        raise ApplyError("addons/state-file.md has no '## Path rule' section")
+    rule = f"---\npaths: CLAUDE-STATE.md\n---\n\n# State file\n\n{rule_body}\n".encode()
+    # Kit text under a fixed manifest key outside docs/standards/ (F1-9): rewritten on every
+    # apply, and an edit in the project is a finding like any kit file's.
+    cur = root / STATE_RULE
+    if (
+        cur.is_file()
+        and cur.read_bytes() != rule
+        and old_manifest.get(STATE_RULE) != rc.sha256_bytes(cur.read_bytes())
+    ):
+        plan.notes.append(
+            f"{STATE_RULE} was edited in the project; the kit's path rule replaces it (use"
+            " Overrides or promote)"
+        )
+    plan.write(STATE_RULE, rule, "state-file path rule")
+    manifest[STATE_RULE] = rc.sha256_bytes(rule)
+    # The user-docs rule, the same way: Claude Code loads it only for README.md and docs/**.
+    docs_rule = USER_DOCS_RULE_TEXT.encode()
+    cur = root / rc.USER_DOCS_RULE
+    if (
+        cur.is_file()
+        and cur.read_bytes() != docs_rule
+        and old_manifest.get(rc.USER_DOCS_RULE) != rc.sha256_bytes(cur.read_bytes())
+    ):
+        plan.notes.append(
+            f"{rc.USER_DOCS_RULE} was edited in the project; the kit's path rule replaces it (use"
+            " Overrides or promote)"
+        )
+    plan.write(rc.USER_DOCS_RULE, docs_rule, "user-docs path rule")
+    manifest[rc.USER_DOCS_RULE] = rc.sha256_bytes(docs_rule)
+
+    std_root = (root / rc.STANDARDS_DIR).resolve()
+    for dest in sorted(old_manifest):
+        if "#" in dest or dest in manifest:
+            continue
+        p = root / dest
+        if not p.is_file() or std_root not in p.resolve().parents:
+            continue
+        plan.removes.append(dest)
+        if rc.sha256_bytes(p.read_bytes()) != old_manifest[dest]:
+            plan.notes.append(
+                f"{dest} was edited in the project and is no longer selected; removed (git keeps"
+                " the edit)"
+            )
+
+    for fname, tmpl in (("AGENTS.md", T_AGENTS), ("CLAUDE.md", T_CLAUDE)):
+        raw_template = kit_file(tmpl, "template").read_text()
+        template_blocks = rc.block_contents(raw_template)
+        wanted: dict[str, str] = {}
+        for n in names:
+            if n not in template_blocks:
+                continue
+            body = block_text(fname, n, template_blocks)
+            if body is None:
+                plan.notes.append(f"no kit text for {fname} block '{n}'; block left out")
+                continue
+            wanted[n] = body
+        path = root / fname
+        if path.is_file():
+            text, why = path.read_text(), "kit blocks"
+        else:
+            text, why = render_template(tmpl, chosen, values), "from template"
+        if fname == "AGENTS.md":
+            text = set_standards_line(text, f"Standards: dev-ai-standards v{version} ({choices})")
+            why = "Standards line and kit blocks" if path.is_file() else why
+            text = add_kit_rows(text, render_template(tmpl, chosen, values), manifest)
+            if path.is_file():
+                with_people = add_people(text, render_template(tmpl, chosen, values))
+                if with_people != text:
+                    text, why = with_people, why + ", People section"
+        new_text = render_blocks(text, wanted, anchor_after_standards=fname == "AGENTS.md")
+        plan.write(fname, new_text.encode(), why)
+        for n, body in wanted.items():
+            manifest[f"{fname}#{n}"] = rc.sha256_bytes(body.encode())
+
+    if (root / "CLAUDE.md").is_file() and not rc.has_import((root / "CLAUDE.md").read_text()):
+        plan.notes.append(
+            "CLAUDE.md has no '@AGENTS.md' line (project-owned, left as is); rules_check fails"
+            " until it does"
+        )
+    plan.write_if_absent(
+        "CHANGELOG.md", render_template(T_CHANGELOG, chosen, values).encode(), "from template"
+    )
+    for src, dest in IF_ABSENT_FILES.items():
+        if (KIT / src).is_file():
+            plan.write_if_absent(
+                dest, render_template(src, chosen, values).encode(), "from template"
+            )
+    for tsrc, tdest in IF_ABSENT_TREES.items():
+        tdir = KIT / tsrc
+        if not tdir.is_dir():
+            continue
+        # An existing project keeps its own records: no second ADR 0001 and no planning index
+        # pointing at a milestone apply never writes (K2-4).
+        pdir = root / tdest
+        if tdest == "planning-docs" and pdir.is_dir() and any(x.is_file() for x in pdir.rglob("*")):
+            plan.notes.append(
+                "planning-docs/ already has files; planning index template not written"
+            )
+            continue
+        for p in sorted(tdir.rglob("*")):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(KIT).as_posix()
+            dest = f"{tdest}/{p.relative_to(tdir).as_posix()}"
+            m = re.fullmatch(r"docs/adr/(\d{4})-.*", dest)
+            adr_dir = root / "docs" / "adr"
+            if m and adr_dir.is_dir() and any(adr_dir.glob(f"{m.group(1)}-*")):
+                plan.notes.append(f"docs/adr/ already has an ADR {m.group(1)}; {dest} not written")
+                continue
+            plan.write_if_absent(
+                dest, render_template(rel, chosen, values).encode(), "from template"
+            )
+    if plan.write_if_absent(
+        "scripts/check",
+        render_template(T_SCRIPTS_CHECK, chosen, values).encode(),
+        "from template; add the project's steps",
+    ):
+        plan.executable.add("scripts/check")
+    if plan.write_if_absent(
+        "scripts/setup",
+        render_template(T_SCRIPTS_SETUP, chosen, values).encode(),
+        "from template; newcomers run it once after cloning",
+    ):
+        plan.executable.add("scripts/setup")
+    if plan.write_if_absent(
+        CODEOWNERS, render_template(T_CODEOWNERS, chosen, values).encode(), "from template"
+    ):
+        if owner_from in ("git config user.name", "default"):
+            plan.notes.append(
+                f"owner '{owner}' comes from {owner_from}, not a GitHub login: check AGENTS.md"
+                f" People and {CODEOWNERS} (set NEW_CLAUDE_PROJECT_OWNER or pass --owner)"
+            )
+    else:
+        plan.notes.append(f"{CODEOWNERS} already exists; left as is (project-owned)")
+    if args.stack == "python":
+        if not plan.write_if_absent(
+            "pyproject.toml",
+            render_template(T_PYPROJECT, chosen, values).encode(),
+            "python stack, from template; run uv lock",
+        ):
+            plan.notes.append("pyproject.toml already exists; left as is (project-owned)")
+        where = ruff_settings(root)
+        if where:
+            plan.notes.append(
+                f"Ruff settings already in {where}; ruff.toml not written (kit rules:"
+                ' docs/standards/stacks/python.md). Add extend-exclude = ["docs/standards"]'
+                " there, so kit code isn't linted under the project's rules"
+            )
+        else:
+            plan.write(
+                "ruff.toml",
+                render_template(T_RUFF, chosen, values).encode(),
+                "Ruff settings, python stack",
+            )
+        ci_text = render_python_ci(chosen, values).encode()
+        written = plan.write_if_absent(PYTHON_CI, ci_text, "python test CI, from template")
+        if not written and (root / PYTHON_CI).read_bytes() != ci_text:
+            plan.notes.append(
+                f"{PYTHON_CI} differs from the kit template; left as is (project-owned)"
+            )
+    plan.write_if_absent(STATE_LOADER, b"@CLAUDE-STATE.md\n", "state-file loader")
+
+    wf = ".github/workflows/rules-check.yml"
+    wf_data = kit_file(T_CI, "template").read_bytes()
+    if not (root / wf).exists():
+        plan.write(wf, wf_data, "from template")
+    elif (root / wf).read_bytes() != wf_data:
+        plan.notes.append(
+            f"{wf} differs from the kit template; left as is (project-owned). The kit's copy may"
+            " carry security fixes (K1-1, F1-1 push base): compare with"
+            f" docs/standards/{T_CI} and replace it in a separate PR"
+        )
+    if args.high_stakes:
+        plan.write_if_absent(DOCS_ONLY_LIST, DOCS_ONLY_DEFAULT.encode(), "default docs-only list")
+    if args.codex:
+        plan.write_if_absent(
+            ".codex/config.toml", kit_file(SNIPPET_CODEX).read_bytes(), "Codex defaults"
+        )
+
+    gi_text, gi_patterns = gitignore_lines(chosen, values, args.stack)
+    merge_gitignore(plan, gi_text, gi_patterns)
+    lines = [
+        ln for ln in render_template(T_GITATTRIBUTES, chosen, values).splitlines() if ln.strip()
+    ]
+    cur = root / ".gitattributes"
+    new = add_lines(cur.read_text() if cur.is_file() else "", lines)
+    if new is not None:
+        plan.write(".gitattributes", new.encode(), "kit lines added")
+    common = git_common_dir(root)
+    if common is not None:
+        info = common / "info" / "attributes"
+        rules = [ln for ln in lines if not ln.startswith("#")]
+        new = add_lines(info.read_text() if info.is_file() else "", rules)
+        if new is not None:
+            shown = info.relative_to(root).as_posix() if root in info.parents else str(info)
+            plan.write(shown, new.encode(), "kit lines added, local")
+    else:
+        plan.notes.append(
+            "not a git repository: .git/info/attributes not written (run apply again after 'git"
+            " init')"
+        )
+
+    merge_settings(plan)
+    plan_hook(plan)
+    plan.write(rc.MANIFEST_PATH, rc.format_manifest(manifest).encode(), "manifest")
+    plan.show(args.dry_run)
+    if args.dry_run:
+        print("dry run: nothing written")
+        return 0
+    if args.codex:
+        print(
+            "next: run the claude-codex-integration skill (step 3) for the SessionStart hook"
+            " that lists"
+            " Codex handoffs; apply doesn't install it"
+        )
+    plan.run()
+    print(f"applied dev-ai-standards v{version} ({choices}) to {root}")
+    return 0
+
+
+def cmd_drift(args: argparse.Namespace) -> int:
+    root = Path(args.dir).resolve()
+    manifest, source = rc.load_manifest(root, args.base)
+    findings, notes = rc.kit_findings(root, manifest, source, args.base)
+    print(f"drift: manifest from {source}")
+    for n in notes:
+        print(f"drift: {n}")
+    agents = root / "AGENTS.md"
+    if agents.is_file():
+        found, problems = rc.overrides(agents.read_text())
+        for b, t in found:
+            print(f"drift: override {b}: {t}")
+        findings += problems
+    for f in findings:
+        print(f"drift: {f}")
+    if findings:
+        print(f"drift: {len(findings)} finding(s)", file=sys.stderr)
+        return 1
+    print("drift: none")
+    return 0
+
+
+def cmd_promote(args: argparse.Namespace) -> int:
+    root = Path(args.dir).resolve()
+    kp = args.kit_path
+    if "#" in kp:
+        fname, name = kp.split("#", 1)
+        if fname not in rc.BLOCK_FILES:
+            raise ApplyError(f"blocks live only in {' and '.join(rc.BLOCK_FILES)}")
+        path = root / fname
+        project = rc.block_contents(path.read_text()).get(name) if path.is_file() else None
+        if project is None:
+            raise ApplyError(f"block '{name}' not found in {path}")
+        tmpl = T_AGENTS if fname == "AGENTS.md" else T_CLAUDE
+        kit_text = block_text(
+            fname, name, rc.block_contents(kit_file(tmpl, "template").read_text())
+        )
+        if fname == "AGENTS.md" and name == "core":
+            target = "core.md"
+        else:
+            section_name = "Always loaded" if fname == "AGENTS.md" else "Claude only"
+            target = f"{source_file(name)} (section '{section_name}')"
+        same = kit_text is not None and norm_block(project) == kit_text
+        copy_cmd = f"# edit {target} in the kit to match the project's block"
+    else:
+        rel = kp.removeprefix(rc.STANDARDS_DIR + "/")
+        pfile = root / rc.STANDARDS_DIR / rel
+        if not pfile.is_file():
+            raise ApplyError(f"{pfile} not found")
+        project = pfile.read_text()
+        kit_text = kit_file(rel).read_text()
+        target = rel
+        same = project == kit_text
+        copy_cmd = f"cp {q(pfile)} {q(KIT / rel)}"
+    if same:
+        print(f"promote: {kp} matches the kit; nothing to promote")
+        return 0
+    diff = difflib.unified_diff(
+        (kit_text or "").splitlines(),
+        project.splitlines(),
+        f"kit/{target}",
+        f"project/{kp}",
+        lineterm="",
+    )
+    print("\n".join(diff))
+    slug = re.sub(r"[^a-z0-9]+", "-", kp.lower()).strip("-")
+    print("\npromote: not run; review the diff, then run these in the kit checkout:")
+    kit = q(KIT)
+    print(f"git -C {kit} fetch origin && git -C {kit} switch -c {q('promote/' + slug)} origin/main")
+    print(copy_cmd)
+    print(f"git -C {kit} commit -a  # one changelog line; the standard co-author trailer")
+    print(f"git -C {kit} push -u origin {q('promote/' + slug)}")
+    print(
+        f"gh pr create --repo {q(args.repo)} --base main --head {q('promote/' + slug)} "
+        f"--title {q('Promote ' + kp)} --body 'Proposed from a project copy; diff in the commit.'"
+    )
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="dev-ai-standards",
+        description="Apply the dev-ai-standards kit, check drift, or promote a change.",
+    )
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    a = sub.add_parser(
+        "apply",
+        help=(
+            "copy the kit into a project (and, in a repo with no hooks yet, install the commit-msg"
+            " and pre-commit hooks); never overwrites project-owned text"
+        ),
+    )
+    a.add_argument("dir", nargs="?", default=".", help="project dir (default .)")
+    a.add_argument("--high-stakes", action="store_true", help="add the high-stakes add-on")
+    a.add_argument("--stack", choices=STACKS, default="other", help="stack (default other)")
+    a.add_argument("--codex", action="store_true", help="add the Codex add-on")
+    a.add_argument("--no-pr", action="store_true", help="local --no-ff merges instead of PRs")
+    a.add_argument(
+        "--addon",
+        action="append",
+        help=(
+            "accepted for P001 B2's command line; state-file, planning and multi-session are"
+            " always on"
+        ),
+    )
+    a.add_argument("--name", help="project name for {{name}} (default: the dir's name)")
+    a.add_argument(
+        "--owner",
+        help=(
+            "GitHub login for {{owner}}, AGENTS.md People and .github/CODEOWNERS (default:"
+            " NEW_CLAUDE_PROJECT_OWNER, else git config user.name, else operator)"
+        ),
+    )
+    a.add_argument("--dry-run", action="store_true", help="show what would change; write nothing")
+    d = sub.add_parser("drift", help="compare kit files and blocks with the base branch's manifest")
+    d.add_argument("dir", nargs="?", default=".", help="project dir (default .)")
+    d.add_argument("--base", help="ref holding the manifest (default origin/main, then main)")
+    p = sub.add_parser(
+        "promote", help="print the commands to propose a project's kit edit upstream (runs nothing)"
+    )
+    p.add_argument(
+        "kit_path", help="kit path (e.g. refs/honesty.md), AGENTS.md#<block> or CLAUDE.md#<block>"
+    )
+    p.add_argument("dir", nargs="?", default=".", help="project dir (default .)")
+    p.add_argument("--repo", default=KIT_REPO, help=f"kit GitHub repo (default {KIT_REPO})")
+    args = ap.parse_args(argv)
+    try:
+        return {"apply": cmd_apply, "drift": cmd_drift, "promote": cmd_promote}[args.cmd](args)
+    except (ApplyError, rc.CheckError, OSError, subprocess.CalledProcessError) as e:
+        print(f"dev-ai-standards: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

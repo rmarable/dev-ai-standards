@@ -1,0 +1,370 @@
+#!/bin/sh
+# /// script
+# requires-python = ">=3.12"
+# ///
+""":"
+# sh front (POSIX sh, so it runs on a stock Mac): needs uv, then runs this file as Python >= 3.12.
+# GUI git clients may not pass the shell's PATH, so uv's usual folders are tried too.
+if [ -z "${DEV_AI_STANDARDS_NO_UV_SEARCH-}" ] && ! command -v uv >/dev/null 2>&1; then
+  for d in "$HOME/.local/bin" "$HOME/.cargo/bin" /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "$d/uv" ]; then PATH="$d:$PATH"; export PATH; break; fi
+  done
+fi
+if ! command -v uv >/dev/null 2>&1; then
+  printf '%s %s\n' 'uv is required: brew install uv' \
+    '(or see https://docs.astral.sh/uv/getting-started/installation/)' >&2
+  exit 1
+fi
+# A user-level UV_PYTHON would override requires-python above.
+unset UV_PYTHON
+exec uv run --script "$0" "$@"
+":
+gate-status: decides docs only, then posts or verifies the local-gate commit status.
+
+Implements P001 Part A, high-stakes add-on, "Local-gate status" and final decision 1: the
+script and the docs-only list always come from the base branch, never the PR's branch.
+"""
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+DEFAULT_SCRIPT = "docs/standards/bin/gate-status"
+DEFAULT_LIST = ".github/docs-only-paths"
+DEFAULT_CONTEXT = "local-gate"
+# Enforcement paths (checks/README.md): never docs only, whatever the list says.
+ENFORCEMENT = (
+    "checks/",
+    "bin/",
+    "scripts/check",
+    "scripts/setup",
+    ".github/",
+    "docs/standards/",
+)
+# Agent-instruction and attribute files count at any depth: Claude Code and Codex read nested
+# copies, and a nested .gitattributes changes how git sees files (K1-4).
+ENFORCEMENT_NAMES = (
+    "AGENTS.md",
+    "AGENTS.override.md",
+    "CLAUDE.md",
+    "CLAUDE.local.md",
+    "CODEOWNERS",
+    ".gitattributes",
+)
+ENFORCEMENT_DIRS = (".claude", ".codex", ".agents", ".githooks")
+RESERVED_CONTEXTS = ("rules-check",)
+
+
+class GateError(Exception):
+    pass
+
+
+def git(*args: str, check: bool = True) -> str:
+    r = subprocess.run(["git", *args], capture_output=True, text=True, check=False)
+    if check and r.returncode != 0:
+        raise GateError(f"git {' '.join(args[:2])} failed: {r.stderr.strip()[:200]}")
+    return r.stdout if r.returncode == 0 else ""
+
+
+def git_bytes(*args: str) -> bytes | None:
+    r = subprocess.run(["git", *args], capture_output=True, check=False)
+    return r.stdout if r.returncode == 0 else None
+
+
+def is_enforcement(path: str) -> bool:
+    parts = path.split("/")
+    return (
+        any(on_prefix(path, e) for e in ENFORCEMENT)
+        or parts[-1] in ENFORCEMENT_NAMES
+        or any(d in ENFORCEMENT_DIRS for d in parts[:-1])
+        or parts[-1] in ENFORCEMENT_DIRS
+    )
+
+
+def on_prefix(path: str, entry: str) -> bool:
+    if entry.endswith("/"):
+        return path.startswith(entry)
+    return path == entry or path.startswith(entry + "/")
+
+
+def parse_list(text: str) -> list[str]:
+    """Docs-only path prefixes; globs and extensions are refused."""
+    entries: list[str] = []
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if any(c in line for c in "*?[]") or re.fullmatch(r"\.[A-Za-z0-9]+", line):
+            raise GateError(
+                f"docs-only list line {n} '{line}' is a glob or extension; use path prefixes"
+            )
+        if line.startswith("/") or ".." in line.split("/"):
+            raise GateError(f"docs-only list line {n} '{line}' is not a repo-relative path")
+        entries.append(line)
+    return entries
+
+
+def changes(base: str, head: str) -> list[dict[str, object]]:
+    """One record per change in base...head: status, paths, modes, binary."""
+    raw = git("diff", "--raw", "-z", "-M", "-C", "--no-abbrev", f"{base}...{head}")
+    parts = raw.split("\0")
+    out: list[dict[str, object]] = []
+    i = 0
+    while i < len(parts) and parts[i]:
+        meta = parts[i].lstrip(":").split()
+        status = meta[4]
+        n = 2 if status[0] in "RC" else 1
+        paths = parts[i + 1 : i + 1 + n]
+        out.append({"status": status[0], "paths": paths, "modes": (meta[0], meta[1])})
+        i += 1 + n
+    # No attribute file or textconv may turn a binary into text (K1-4); the blob check below
+    # reads the bytes themselves.
+    numstat = git(
+        "-c",
+        "core.attributesFile=/dev/null",
+        "diff",
+        "--numstat",
+        "-z",
+        "--no-renames",
+        "--no-textconv",
+        f"{base}...{head}",
+    )
+    binary = {rec.split("\t", 2)[2] for rec in numstat.split("\0") if rec.startswith("-\t-\t")}
+    for c in out:
+        paths: list[str] = c["paths"]  # type: ignore[assignment]
+        c["binary"] = any(p in binary for p in paths) or (
+            c["status"] != "D" and has_nul(git_bytes("cat-file", "blob", f"{head}:{paths[-1]}"))
+        )
+    return out
+
+
+def has_nul(data: bytes | None) -> bool:
+    return data is not None and b"\0" in data[:8000]
+
+
+def docs_only(entries: list[str], recs: list[dict[str, object]]) -> list[str]:
+    """Reasons the change is not docs only (empty list: docs only)."""
+    if not recs:
+        return ["no changes"]
+    reasons: list[str] = []
+    for c in recs:
+        paths: list[str] = c["paths"]  # type: ignore[assignment]
+        label = " -> ".join(paths)
+        if c["status"] == "C":
+            reasons.append(f"copy: {label}")
+        if "160000" in c["modes"]:  # type: ignore[operator]
+            reasons.append(f"submodule: {label}")
+        if "120000" in c["modes"]:  # type: ignore[operator]
+            reasons.append(f"symlink: {label}")
+        if c["binary"]:
+            reasons.append(f"binary: {label}")
+        for p in paths:
+            if is_enforcement(p):
+                reasons.append(f"enforcement path: {p}")
+            elif not any(on_prefix(p, e) for e in entries):
+                reasons.append(f"not on the base branch's docs-only list: {p}")
+    return reasons
+
+
+def run_base_copy(base: str, script_path: str, argv: list[str]) -> int | None:
+    """Re-run the base branch's copy of this script unless this file already is it."""
+    base_bytes = git_bytes("show", f"{base}:{script_path}")
+    if base_bytes is None:
+        raise GateError(
+            f"{base} has no {script_path}; gate-status runs only from the base branch's copy"
+        )
+    if Path(__file__).resolve().read_bytes() == base_bytes:
+        return None
+    print(
+        f"gate-status: this copy differs from {base}:{script_path}; running the base copy",
+        file=sys.stderr,
+    )
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d) / "gate-status"
+        tmp.write_bytes(base_bytes)
+        return subprocess.run([sys.executable, str(tmp), *argv], check=False).returncode
+
+
+def gh_json(*args: str) -> object:
+    r = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
+    if r.returncode != 0:
+        raise GateError(f"gh {' '.join(args[:2])} failed: {r.stderr.strip()[:200]}")
+    return json.loads(r.stdout or "null")
+
+
+def repo_slug(given: str | None) -> str:
+    if given:
+        return given
+    data = gh_json("repo", "view", "--json", "nameWithOwner")
+    return str(data["nameWithOwner"])  # type: ignore[index]
+
+
+def pr_head(given: str | None) -> str:
+    if given:
+        return given
+    data = gh_json("pr", "view", "--json", "headRefOid")
+    return str(data["headRefOid"])  # type: ignore[index]
+
+
+def verify(repo: str, sha: str, context: str, operator: str) -> list[str]:
+    problems: list[str] = []
+    # Statuses come newest first; 100 per page holds the latest of this context unless 100
+    # newer statuses sit on the commit. Check runs are filtered by name, so none can hide on a
+    # later page (K1-12).
+    statuses = gh_json("api", f"repos/{repo}/commits/{sha}/statuses?per_page=100")
+    mine = [s for s in statuses if s.get("context") == context]  # type: ignore[union-attr]
+    if not mine:
+        problems.append(f"no '{context}' status on {sha[:12]}")
+    else:
+        latest = mine[0]
+        if (latest.get("creator") or {}).get("login") != operator:
+            problems.append(f"'{context}' status was not created by {operator}")
+        if latest.get("state") != "success":
+            problems.append(f"'{context}' status is {latest.get('state')}")
+    runs = gh_json(
+        "api", f"repos/{repo}/commits/{sha}/check-runs?check_name={context}&per_page=100"
+    )
+    count = (runs or {}).get("total_count", 0)  # type: ignore[union-attr]
+    names = [r.get("name") for r in (runs or {}).get("check_runs", [])]  # type: ignore[union-attr]
+    if count or context in names:
+        problems.append(f"a check run is named '{context}' (could stand in for the gate)")
+    return problems
+
+
+def check_args(args: argparse.Namespace) -> None:
+    """Refuse arguments that would let a caller pick a looser base or status (K1-6, F1-2).
+
+    --base must be origin/<the PR's base branch> from 'gh pr view'; the script and the docs-only
+    list always sit at their fixed paths. The context may never be a CI context.
+    """
+    if args.context in RESERVED_CONTEXTS:
+        raise GateError(f"--context {args.context} is the CI status; gate-status never posts it")
+    data = gh_json("pr", "view", "--json", "baseRefName")
+    want = f"origin/{data['baseRefName']}"  # type: ignore[index]
+    if args.base != want:
+        raise GateError(f"--base {args.base} is not the PR's base ({want})")
+
+
+def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911, PLR0912, PLR0915 (one linear command flow)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    ap = argparse.ArgumentParser(
+        prog="gate-status",
+        description=(
+            "Post or verify the local-gate status. Always runs the base branch's copy and"
+            " docs-only list."
+        ),
+    )
+    mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
+        "--check", action="store_true", help="say whether the PR is docs only; post nothing"
+    )
+    mode.add_argument(
+        "--docs-only",
+        action="store_true",
+        help="post 'docs only, no <gate> gate' if the script agrees",
+    )
+    mode.add_argument(
+        "--passed", type=int, metavar="N", help="post 'N passed, 0 skipped' after the real full run"
+    )
+    mode.add_argument(
+        "--verify",
+        action="store_true",
+        help="before the merge ask: check the status's creator and names",
+    )
+    ap.add_argument("--skipped", type=int, help="with --passed: skipped count (must be 0)")
+    ap.add_argument("--base", default="origin/main", help="base branch ref (default origin/main)")
+    ap.add_argument(
+        "--context", default=DEFAULT_CONTEXT, help=f"status context (default {DEFAULT_CONTEXT})"
+    )
+    ap.add_argument(
+        "--gate", default="local", help="gate name in the docs-only text (default local)"
+    )
+    ap.add_argument("--pr-head", help="PR head SHA (default: from 'gh pr view')")
+    ap.add_argument("--repo", help="OWNER/REPO (default: from 'gh repo view')")
+    ap.add_argument("--operator", help="with --verify: the operator's GitHub login")
+    ap.add_argument("--dry-run", action="store_true", help="print the gh call instead of posting")
+    args = ap.parse_args(argv)
+    try:
+        check_args(args)
+        git("fetch", "--quiet", args.base.split("/", 1)[0])
+        code = run_base_copy(args.base, DEFAULT_SCRIPT, argv)
+        if code is not None:
+            return code
+
+        if args.verify:
+            if not args.operator:
+                raise GateError("--verify needs --operator <login>")
+            sha = pr_head(args.pr_head)
+            problems = verify(repo_slug(args.repo), sha, args.context, args.operator)
+            for p in problems:
+                print(f"gate-status: FAIL {p}")
+            if problems:
+                print("gate-status: verify failed", file=sys.stderr)
+                return 1
+            print("gate-status: verified")
+            return 0
+
+        list_text = git_bytes("show", f"{args.base}:{DEFAULT_LIST}")
+        if list_text is None:
+            raise GateError(f"{args.base} has no {DEFAULT_LIST}")
+        entries = parse_list(list_text.decode())
+        reasons = docs_only(entries, changes(args.base, "HEAD"))
+
+        if args.check:
+            for r in reasons:
+                print(f"gate-status: {r}")
+            print("gate-status: docs only" if not reasons else "gate-status: not docs only")
+            return 0 if not reasons else 1
+
+        head = git("rev-parse", "HEAD").strip()
+        sha = pr_head(args.pr_head)
+        if head != sha:
+            raise GateError(f"HEAD {head[:12]} is not the PR head {sha[:12]}")
+        if args.docs_only:
+            if reasons:
+                for r in reasons:
+                    print(f"gate-status: {r}")
+                raise GateError("not docs only; run the full gate and post with --passed")
+            desc = f"docs only, no {args.gate} gate"
+        else:
+            if args.skipped is None:
+                raise GateError("--passed needs --skipped")
+            if args.skipped != 0:
+                raise GateError(f"{args.skipped} skipped; the gate needs 0 skipped")
+            if args.passed <= 0:
+                raise GateError("--passed must be a positive count")
+            if git("status", "--porcelain", "--untracked-files=all").strip():
+                raise GateError("working tree is not clean")
+            desc = f"{args.passed} passed, 0 skipped"
+        cmd = [
+            "gh",
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo_slug(args.repo)}/statuses/{sha}",
+            "-f",
+            "state=success",
+            "-f",
+            f"context={args.context}",
+            "-f",
+            f"description={desc}",
+        ]
+        if args.dry_run:
+            print("gate-status: would run: " + " ".join(cmd))
+            return 0
+        r = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if r.returncode != 0:
+            raise GateError(f"posting the status failed: {r.stderr.strip()[:200]}")
+        print(f"gate-status: posted '{desc}' on {sha[:12]}")
+        return 0
+    except GateError as e:
+        print(f"gate-status: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

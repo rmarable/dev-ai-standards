@@ -1,0 +1,151 @@
+#!/bin/sh
+# /// script
+# requires-python = ">=3.12"
+# ///
+""":"
+# sh front (POSIX sh, so it runs on a stock Mac): needs uv, then runs this file as Python >= 3.12.
+# GUI git clients may not pass the shell's PATH, so uv's usual folders are tried too.
+if [ -z "${DEV_AI_STANDARDS_NO_UV_SEARCH-}" ] && ! command -v uv >/dev/null 2>&1; then
+  for d in "$HOME/.local/bin" "$HOME/.cargo/bin" /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "$d/uv" ]; then PATH="$d:$PATH"; export PATH; break; fi
+  done
+fi
+if ! command -v uv >/dev/null 2>&1; then
+  printf '%s %s\n' 'uv is required: brew install uv' \
+    '(or see https://docs.astral.sh/uv/getting-started/installation/)' >&2
+  exit 1
+fi
+# A user-level UV_PYTHON would override requires-python above.
+unset UV_PYTHON
+exec uv run --script "$0" "$@"
+":
+scripts/check [--full]: runs exactly what CI runs (core). Written once by dev-ai-standards apply;
+project-owned from then on.
+<!-- if python -->
+
+Python stack: Ruff, pyright and pytest (when tests/ has test files) are already here, so a fresh
+project passes in CI. Add any further steps in project_steps() below.
+<!-- endif -->
+<!-- if iac -->
+
+Add this project's steps (build, lint, type checks, tests; --full adds the full suite) in
+project_steps() below, then set TODO = False. Until then this script fails on purpose, so nobody
+reports a check that never ran.
+<!-- endif -->
+<!-- if other -->
+
+Add this project's steps (build, lint, type checks, tests; --full adds the full suite) in
+project_steps() below, then set TODO = False. Until then this script fails on purpose, so nobody
+reports a check that never ran.
+<!-- endif -->
+"""
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+CHECKS = ROOT / "docs" / "standards" / "checks"
+<!-- if python -->
+TODO = False  # python stack: the kit knows the steps (python_steps)
+<!-- endif -->
+<!-- if iac -->
+TODO = True  # set to False once project_steps() holds this project's own steps
+<!-- endif -->
+<!-- if other -->
+TODO = True  # set to False once project_steps() holds this project's own steps
+<!-- endif -->
+
+
+def run(name: str, cmd: list[str]) -> bool:
+    # Drop the throwaway VIRTUAL_ENV that `uv run --script` (the sh front) sets, so `uv run <tool>`
+    # uses the project's own environment without a mismatch warning.
+    env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+    r = subprocess.run(cmd, cwd=ROOT, env=env)
+    print(f"check: {'ok  ' if r.returncode == 0 else 'FAIL'} {name}")
+    return r.returncode == 0
+
+
+def kit_steps() -> list[bool]:
+    results = [run("rules_check", [sys.executable, str(CHECKS / "rules_check.py"), "."])]
+    # No trailer check here: GitHub's own merge commits carry no trailer (A4 pilot). Trailers are
+    # checked by the commit-msg hook and by rules-check over each push or PR range.
+    # ShellCheck on every shell file; without shellcheck it prints a skip line and passes.
+    results.append(run("shellcheck", [sys.executable, str(CHECKS / "shell_lint.py"), "--all", "."]))
+    return results
+<!-- if python -->
+
+
+def tool_cmd(tool: str) -> list[str] | None:
+    """`uv run <tool>` (the locked dev group), else <tool> on PATH, else None."""
+    if shutil.which("uv"):
+        return ["uv", "run", tool]
+    if shutil.which(tool):
+        return [tool]
+    return None
+
+
+def missing(tool: str) -> list[bool]:
+    print(f"check: FAIL {tool}: neither uv nor {tool} found (install uv: https://docs.astral.sh/uv/)")
+    return [False]
+
+
+def has_tests() -> bool:
+    tests = ROOT / "tests"
+    return tests.is_dir() and any(
+        p.is_file() for pat in ("test_*.py", "*_test.py") for p in tests.rglob(pat)
+    )
+
+
+def ruff_steps() -> list[bool]:
+    ruff = tool_cmd("ruff")
+    if ruff is None:
+        return missing("ruff")
+    # Kit copies under docs/standards are checked by the kit, whatever this project's Ruff settings say.
+    excl = ["--extend-exclude", "docs/standards"]
+    return [run("ruff format", [*ruff, "format", "--check", *excl, "."]), run("ruff check", [*ruff, "check", *excl, "."])]
+
+
+def python_steps(full: bool) -> list[bool]:
+    """pyright, then pytest -q when tests/ has test files (--full adds -n auto, pytest-xdist);
+    CI runs --full (python.yml). A fresh project has no tests yet, and pytest fails on none."""
+    pyright = tool_cmd("pyright")
+    results = missing("pyright") if pyright is None else [run("pyright", [*pyright])]
+    if not has_tests():
+        print("check: ok   pytest: no tests yet (add test files under tests/)")
+        return results
+    pytest = tool_cmd("pytest")
+    if pytest is None:
+        return [*results, *missing("pytest")]
+    results.append(run("pytest", [*pytest, "-q", *(["-n", "auto"] if full else [])]))
+    return results
+<!-- endif -->
+
+
+def project_steps(full: bool) -> list[bool]:
+    """This project's own steps, in CI's order. `full` adds the full suite."""
+    return []
+
+
+def main(argv: list[str]) -> int:
+    full = "--full" in argv
+    results = kit_steps()
+<!-- if python -->
+    results += ruff_steps()
+    results += python_steps(full)
+<!-- endif -->
+    results += project_steps(full)
+    if TODO:
+        print("check: FAIL add your project's steps to scripts/check (project_steps), then set TODO = False")
+        results.append(False)
+    if not all(results):
+        print("check: failed", file=sys.stderr)
+        return 1
+    print("check: all passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

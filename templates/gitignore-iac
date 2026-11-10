@@ -1,0 +1,6 @@
+# Infrastructure as code (dev-ai-standards iac stack)
+cdk.out/
+.terraform/
+*.tfstate
+*.tfstate.*
+.aws-sam/

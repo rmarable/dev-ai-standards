@@ -1,0 +1,48 @@
+# dev-ai-standards kit CI (G5): the kit's own scripts/check, with the unit tests on uv-managed
+# Python 3.12 and 3.13 (uv required, operator decision 2026-11-10). No path filter. Actions are
+# pinned by full commit SHA.
+name: kit-ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: kit check (python ${{ matrix.python }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (same pin as ecf CI)
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # uv fetches each Python itself (scripts/check: uv run --python); no setup-python step.
+      - name: Set up uv
+        # The SHA below is a placeholder (not known offline): set the release's full commit SHA.
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0 (same pin as ecf CI)
+
+      - name: ShellCheck (install if missing)
+        run: |
+          set -eu
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck --version | head -2
+          elif sudo apt-get update -q && sudo apt-get install -y -q shellcheck; then
+            shellcheck --version | head -2
+          else
+            echo "kit-ci: FAIL could not install shellcheck with apt"
+            exit 1
+          fi
+
+      # sh runs the script's front, which needs uv and starts it on uv-managed Python 3.12.
+      - name: scripts/check
+        run: sh ./scripts/check --python "${{ matrix.python }}"
