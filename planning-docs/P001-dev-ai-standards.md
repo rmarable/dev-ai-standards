@@ -45,7 +45,7 @@ Each wave ends at an operator checkpoint; approval as in "Scoped approval" (core
 | 1 | A1 distill table (shows the core within 600 words). Personal-file sort. | scratchpad | none | approve table |
 | 2 | A2 build v0.1 (tree below); launcher tested with `--dry-run` and `--local` (Claude may run both). | new repo | none | read-through |
 | 3 | A3 two Opus reviewers; fixes in. A4 pilots. | scratch repos, GitHub | tell (light) | pilot results |
-| 4 | Personal wiring, at peers' step boundaries, each change told to peers first: personal file, links, skill link (v2 `claude-codex-integration` waits for B2), launcher onto PATH, settings snippets without the `permissions.ask` list (it ships in each project's `.claude/settings.json` through `apply`); switches: `claudeInChromeDefaultEnabled: false`, Claude Docs off (`disableClaudeAiConnectors` or `/mcp`), unused synced skills off (`skillOverrides` with `anthropic-skills:<name>`, or `syncClaudeAiSkills: false`). | `~/.claude`, `~/.codex`, `~/.agents`, `~/.local/bin` | tell first | OK per settings change |
+| 4 | Personal wiring, at peers' step boundaries, each change told to peers first: personal file, links, skill link (v2 `claude-codex-integration` waits for B2), launcher onto PATH, settings snippets without the `permissions.ask` list (it ships in each project's `.claude/settings.json` through `apply`); switches: `claudeInChromeDefaultEnabled: false` in `~/.claude.json` (global config; ignored in `settings.json`, A0 row 22), Claude Docs off (`disableClaudeAiConnectors` or `/mcp`), unused synced skills off (`skillOverrides` with `anthropic-skills:<name>`, or `syncClaudeAiSkills: false`). | `~/.claude`, `~/.codex`, `~/.agents`, `~/.local/bin` | tell first | OK per settings change |
 | 5 | A5: create the private GitHub repo, push, operator turns on its PR ruleset, tag `v0.1`. | GitHub | none | OK for create, push, tag |
 | G | **Gate for Part B:** eval/private merged; the main checkout clean; M1 told. Nothing below starts before this. | none | both | operator confirms |
 | 6 | B1: state file to the new shape, own lines only; ask peers to shorten theirs. | `CLAUDE-STATE.md` | ask both | show what moves |
@@ -122,7 +122,11 @@ Scoped approval, Model use. The cap is `wc -w core.md` <= 600 (Markdown included
 - **Ruleset** on `main` and `v*` tags, no bypass list, turned on by the operator (or the launcher
   at their y/N); agents never change remote settings. Default: no force push or deletion; PR
   required; only rules-check required (high-stakes adds the local-gate status; never a
-  path-filtered workflow). `--no-pr`: no force push or deletion, nothing required.
+  path-filtered workflow). `--no-pr`: no force push or deletion, nothing required. **GitHub Free
+  (the operator's plan, 2026-11-10):** private repos can't be protected (believed, not verified in
+  GitHub's docs; A4 tries it once and records the result). Until the account is Pro or Team, or the
+  repo is public, the launcher skips the ruleset and says so, and protection is CI plus the
+  reminders below.
 - **Rules-check workflow** (`templates/ci/rules-check.yml`): no path filter, every push and PR;
   `trailer_check` and `rules_check` with `checks/` and manifest from `main`. Detection only (a
   branch can edit it).
@@ -135,7 +139,9 @@ Scoped approval, Model use. The cap is `wc -w core.md` <= 600 (Markdown included
 - **Reminders:** `permissions.ask` for `Bash(git push *)`, `Bash(git -C * push *)`,
   `Bash(git -c * push *)`, `Bash(git tag *)`, `Bash(gh release *)`, `Bash(gh api *)`,
   `Bash(gh repo *)`, `Bash(gh pr merge *)`, `Bash(new-claude-project *)`,
-  `Bash(*new-claude-project *)`: prompts in auto mode; not a boundary or for Codex. Hooks
+  `Bash(*new-claude-project *)`, plus the bare forms `Bash(git push)`, `Bash(git -C * push)`,
+  `Bash(git -c * push)`, `Bash(new-claude-project)`, `Bash(*new-claude-project)` (two wildcards miss them, A0 rows 18 and 20; each
+  pattern tested in A4): prompts in auto mode; not a boundary or for Codex. Hooks
   (`commit-msg` runs `trailer_check`) are skipped by `--no-verify` and branch edits.
 
 **Scoped approval (core; operator decision 2026-11-10, narrowed).**
@@ -150,7 +156,7 @@ Scoped approval, Model use. The cap is `wc -w core.md` <= 600 (Markdown included
 
 **Model use (core; models mapped in `snippets/claude-settings.json`).** The main session runs the
 strongest model; routine subagents (lookups, code mapping, Explore, Plan) the routine model, which
-never reviews; every review names its model; script-checkable facts are checked by script. Snippet: `CLAUDE_CODE_SUBAGENT_MODEL=sonnet`, never `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`; a
+never reviews; every review names its model; script-checkable facts are checked by script. Snippet: `CLAUDE_CODE_SUBAGENT_MODEL=sonnet`, never `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`; the env var doesn't reach the built-in Explore and Plan agents, so those calls pass `model:` each time (A0 row 13); a
 Claude Code version floor (per-call `model` is ignored before v2.1.251); `attribution.commit` = the
 standard trailer, `sessionUrl: false`; the `permissions.ask` list.
 
@@ -540,8 +546,10 @@ reviews; apply by copy; no long-lived milestone branch by default.
 - Plugin marketplace from a git repo as the way skills reach teammates (A0, then operator).
 - Whether a new linked worktree counts as trusted for project `.codex/config.toml` (A0).
 - Whether Codex's sandbox protects a worktree's `.git` file (A0; the git-dir check runs either way).
-- Rulesets on a private repo under the operator's plan; else what A5 and the launcher do (A0,
-  operator).
+- Resolved 2026-11-10: the operator is on GitHub Free, so no rulesets on private repos (see Enforcement).
+- A4 tests for the A0 unknowns: linked-worktree trust for `.codex/config.toml`; a symlinked
+  `~/.codex/AGENTS.md` (ask Codex a question only that file answers); the `skillOverrides` form for
+  synced skills (wave 4, with OK).
 - GitHub's signature on the merge commits it makes, for `trailer_check` (A4).
 - OD range for B2 (both peers; proposed 780+).
 - M1 merges `main` after B2, or runs on the old rules until `ms-m1` (M1 and operator).
