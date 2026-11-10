@@ -8,8 +8,9 @@
 ## Context
 
 One working project had grown practices that work (one rule file for Claude Code and Codex,
-recorded decisions, trailer and changelog rules, CI watching, review before building, a merge gate
-with 0 skipped), but they lived in one repository and had drifted from the skill that copied them.
+recorded decisions, trailer and changelog rules, watching GitHub's automatic checks after a push,
+review before building, a merge gate with 0 skipped), but they lived in one repository and had
+drifted from the skill that copied them.
 The team's new projects (Python, IaC, mixed) need the same rules without the weight.
 
 ## Decision
@@ -19,12 +20,12 @@ The team's new projects (Python, IaC, mixed) need the same rules without the wei
    project's `AGENTS.md`; heavier rules are add-ons (high-stakes, codex, state-file, planning,
    multi-session) and stacks (python, iac, other). P001 "Part A".
 2. **Copy, don't link.** `apply` copies kit text into `docs/standards/` and marked `AGENTS.md`
-   blocks and writes a hash manifest; kit text is never edited in a project. A project changes a
-   kit rule through `## Overrides` or `promote`. `drift` and `rules_check` compare against `main`'s
+   blocks and writes a list of their fingerprints (hashes); kit text is never edited in a project.
+   A project changes a kit rule through `## Overrides` or `promote`. `drift` and `rules_check` compare against `main`'s
    manifest. P001 "Kit-owned and project-owned text".
 3. **Enforcement in three layers:** GitHub refuses (a ruleset on `main` and `v*` tags, no bypass
-   list, turned on by the operator), CI reports (an unfiltered rules-check with checks from the
-   base branch), the rest are reminders (`permissions.ask`, hooks). Agents never change remote
+   list, turned on by the operator), GitHub's automatic checks report (an unfiltered rules-check
+   with checks from the base branch), the rest are reminders (`permissions.ask`, hooks). Agents never change remote
    settings. On GitHub Free a private repo gets no ruleset; the launcher skips it and says so (A4
    tries it once). P001 "Enforcement".
 4. **PRs by default** for new projects, merged with a merge commit; the operator's approval or
@@ -50,8 +51,8 @@ The team's new projects (Python, IaC, mixed) need the same rules without the wei
 ## Consequences
 
 - Every project carries the same core and can be checked for drift by script.
-- Protection on private repositories rests on CI and reminders until the account can hold
-  rulesets.
+- Protection on private repositories rests on GitHub's automatic checks and reminders until the
+  account can hold rulesets.
 - The Codex loop, the `permissions.ask` patterns, the rules-check workflow's pinned actions and the
   facts marked unknown in `planning-docs/P001-notes/a0-facts.md` are unproven until A4.
 - Personal preferences stay in `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`, outside the kit.

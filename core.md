@@ -10,7 +10,7 @@
 - Terse, precise text for a semi-technical reader; no filler.
 - While working, run only affected tests, lint and type checks; the full suite once, just before asking to commit; never re-run unchanged inputs.
 - One changelog line per user-visible change, under Added/Changed/Fixed/Removed/Deprecated/Security, at most 200 characters, ending with its ID. `CHANGELOG.md merge=union` in `.gitattributes` and `.git/info/attributes`; reread it after each merge.
-- One co-author trailer per commit: Claude's on its own work, Codex's on Codex's. Semver; tags only on approval; with PRs, a release bump goes by PR, tagged on the merge commit.
+- One co-author trailer per commit: the working agent (Claude, Codex), never its model. Semver; tags only on approval; with PRs, a release bump goes by PR, tagged on the merge commit.
 - `main` changes only by GitHub PR with a merge commit, or, under `--no-pr`, a local `--no-ff` merge after the merge check; the operator's approval or merge is the OK.
 - After every push, watch CI to the end and report it; a red run stops the next step.
 - `scripts/check [--full]` runs exactly what CI runs.

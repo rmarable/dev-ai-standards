@@ -4,6 +4,12 @@ One line per user-visible change, newest first, at most 200 characters, ending w
 Sections: Added, Changed, Fixed, Removed, Deprecated, Security. Semantic versioning; at tagging, the
 heading becomes the tag and its date.
 
+## Unreleased
+
+### Changed
+
+- Co-author trailer rule says never a model name; README and docs say "GitHub's automatic checks" and "fingerprint" for CI and hash (operator decision 2026-11-10).
+
 ## v0.1.0 (2026-11-10)
 
 ### Changed
