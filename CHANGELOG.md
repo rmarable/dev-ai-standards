@@ -4,7 +4,7 @@ One line per user-visible change, newest first, at most 200 characters, ending w
 Sections: Added, Changed, Fixed, Removed, Deprecated, Security. Semantic versioning; at tagging, the
 heading becomes the tag and its date.
 
-## v0.1.0 (not yet tagged)
+## v0.1.0 (2026-11-10)
 
 ### Changed
 
