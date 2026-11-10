@@ -15,8 +15,10 @@ them in the repository, where both Claude Code and Codex can read them.
   On a branch everyone writes `ADR-NEW`; the real number is assigned when merging to `main`.
 - A small decision that doesn't justify an ADR (a default value, a name) is a dated "operator
   decision" line in the spec section it changes. Either way, the commit message names it.
-- An ADR is not edited after it is accepted, except its Status line; a later ADR supersedes it and
-  says so.
+- An ADR is not edited after it is accepted, except its Status line. Status is proposed,
+  accepted, superseded by a later ADR, or withdrawn. A later ADR that replaces this one says
+  "Supersedes" and this one's number, and this one's Status names the later ADR (planning add-on,
+  "Retiring a decision").
 - The project follows dev-ai-standards v{{version}} ({{choices}}), as its `AGENTS.md` `Standards:`
   line records. Changes to kit rules go through `AGENTS.md` `## Overrides` or a PR on the kit.
 
