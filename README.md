@@ -2,7 +2,8 @@
 
 Shared working rules and tooling for repositories where Claude Code, and optionally Codex, write
 the code. Agents drift from their rules, and rules drift apart between projects. The kit copies one
-rule set into each project, hashes every copied file, and fails CI when a copy changes.
+rule set into each project, records a fingerprint of every copied file, and makes GitHub's
+automatic checks fail when a copy changes.
 
 ## Quick start
 
@@ -28,12 +29,12 @@ it stops and deletes nothing.
 | Item | Purpose |
 |---|---|
 | `AGENTS.md`, `CLAUDE.md` | The rules; `CLAUDE.md` imports `AGENTS.md`, so both agents read one source. |
-| `docs/standards/` | Kit rule files and checks, plus a manifest of their hashes. |
+| `docs/standards/` | Kit rule files and checks, plus a list of their fingerprints. |
 | Hooks | Git `commit-msg` and `pre-commit` checks; a Claude Code warning when its notes file grows too large. |
-| CI workflows | `rules-check` on every push and pull request; Python tests for the python stack. |
+| GitHub Actions workflows | Automatic checks GitHub runs: `rules-check` on every push and pull request; Python tests for the python stack. |
 | `scripts/setup` | Run once after cloning: checks your tools and turns on the git hooks. |
 | `.github/CODEOWNERS`, `## People` in `AGENTS.md` | Owner and approvers, by GitHub login. |
-| `scripts/check` | Runs what CI runs. Ready for Python; other stacks fail until you add steps. |
+| `scripts/check` | Runs the same checks on your machine that GitHub runs. Ready for Python; other stacks fail until you add steps. |
 | `planning-docs/` | A plan index and the first milestone's plan. |
 
 ## The core rules, in brief
@@ -41,8 +42,8 @@ it stops and deletes nothing.
 - Don't lie or make up facts; a verified fact cites its source and date.
 - Confirm with you before writing files, committing or pushing, unless an approver granted a scoped approval (a recorded permission for one step).
 - `main` changes only through a pull request with a merge commit; your approval or merge is the OK.
-- After every push, watch CI to the end; a failed run stops the next step.
-- One co-author trailer per commit, naming the agent that did the work.
+- After every push, watch GitHub's automatic checks to the end; a failed run stops the next step.
+- One co-author trailer per commit: `Claude <noreply@anthropic.com>` or `Codex <noreply@openai.com>`, by which agent did the work; never a model name.
 - Secrets live only in a secret store, never in the repo, environment or files.
 
 ## Options
@@ -50,7 +51,7 @@ it stops and deletes nothing.
 - **Core** (default): the rules above only.
 - **`--high-stakes`**: sized reviews before building, and a full test gate with nothing skipped on every merge.
 - **`--codex`**: Codex works only in its own `codex/<topic>` branch and worktree, without git writes; Claude Code reviews, commits and opens the pull request.
-- **`--stack python`**: uv, Ruff, pyright and pytest, with `pyproject.toml`, and `uv.lock` in new projects, so CI passes from the first push.
+- **`--stack python`**: uv, Ruff, pyright and pytest, with `pyproject.toml`, and `uv.lock` in new projects, so GitHub's checks pass from the first push.
 - **`--stack iac`**: AWS guidance for infrastructure code.
 - **`--stack other`** (default): no toolchain rules; you list the project's commands.
 
@@ -79,8 +80,8 @@ rest goes in a second one.
 
 ## Limits
 
-- Hooks are reminders; `git commit --no-verify` skips them. CI is the real check.
-- Required reviews and branch protection on private repos need a paid GitHub plan (Team or Pro; unverified); on GitHub Free, rely on CI and the reminders.
+- Hooks are reminders; `git commit --no-verify` skips them. GitHub's automatic checks are the real check.
+- Required reviews and branch protection on private repos need a paid GitHub plan (Team or Pro; unverified); on GitHub Free, rely on GitHub's automatic checks and the reminders.
 - Agents can't verify who is typing; `## People` is a policy, not a login.
 - The secret scan is a tripwire for common credential formats, not a guarantee.
 - The iac stack is unproven: no project has used it.

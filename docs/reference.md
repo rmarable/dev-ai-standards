@@ -15,7 +15,7 @@ Detail behind the [README](../README.md). The checks themselves are described in
 | Claude Code | 2.1.251 or later | the settings the kit writes (earlier versions let one environment variable override each subagent's model) |
 | Codex | | `--codex` |
 | `ruff` | optional | Ruff in python-stack projects. The pre-commit hook uses `ruff` on `PATH` or `.venv/bin/ruff`, else prints a "skipped" line; `scripts/check` uses `uv run <tool>` or the tool on `PATH` for Ruff, pyright and pytest, else fails that step |
-| `shellcheck` | optional | shell linting; without it the local check prints a "skipped" line and passes, CI fails |
+| `shellcheck` | optional | shell linting; without it the local check prints a "skipped" line and passes, GitHub's automatic checks fail |
 | `zsh` | optional | a syntax check of zsh files |
 
 `bin/bootstrap` checks for the Xcode Command Line Tools, git and uv and prints the install command
@@ -23,8 +23,8 @@ for anything missing. For uv it offers to run `brew install uv` after a y/N ques
 terminal and never when an agent runs it (`CLAUDECODE` set); it installs nothing else. It exits 0
 when everything is present, else 1.
 
-The kit's own `scripts/check` runs its tests on Python 3.12 through uv; `--full` and the kit's CI
-add 3.13.
+The kit's own `scripts/check` runs its tests on Python 3.12 through uv; `--full` and the kit's GitHub
+checks add 3.13.
 
 ## Setup, once per computer
 
@@ -151,7 +151,8 @@ Always rewritten (kit-owned):
 - `docs/standards/`: `core.md`, the selected add-ons and stack, `refs/`, `checks/`, `templates/`,
   the Claude Code settings snippet; with `--high-stakes` also `refs/diff-review.md` and
   `bin/gate-status`; with `--codex` the Codex config snippet. Files no longer selected are removed.
-- `docs/standards/manifest`: a SHA-256 hash per kit file and kit block.
+- `docs/standards/manifest`: a fingerprint (SHA-256 hash) per kit file and kit block, so any change to
+  kit text shows up.
 - `.claude/rules/state-file.md`: the rule Claude Code loads when it edits `CLAUDE-STATE.md`.
 - `.claude/rules/user-docs.md`: the rule Claude Code loads when it edits `README.md` or `docs/**`;
   it points to `docs/standards/refs/user-docs.md` (audience, voice, banned words, shape).
@@ -166,7 +167,7 @@ commented example), `.github/workflows/rules-check.yml`, with `--high-stakes`
 `.github/docs-only-paths`, with `--codex` `.codex/config.toml`, and with `--stack python`
 `.github/workflows/python.yml` (path-filtered, never a required check), `ruff.toml` (unless the
 project already has Ruff settings) and `pyproject.toml`: a uv project named after the folder,
-`requires-python` from the CI minimum, a `dev` group with ruff, pyright, pytest and pytest-xdist.
+`requires-python` from the oldest Python version GitHub's checks test, a `dev` group with ruff, pyright, pytest and pytest-xdist.
 
 Merged, never replacing your values:
 
