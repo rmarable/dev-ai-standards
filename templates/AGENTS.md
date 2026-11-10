@@ -32,9 +32,6 @@ Rules in these files bind as if they were here. Each add-on block below names it
 <!-- dev-ai-standards:end high-stakes -->
 
 <!-- endif -->
-<!-- dev-ai-standards:begin state-file -->
-<!-- dev-ai-standards:end state-file -->
-
 <!-- dev-ai-standards:begin planning -->
 <!-- dev-ai-standards:end planning -->
 

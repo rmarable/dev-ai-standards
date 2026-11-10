@@ -34,7 +34,9 @@ class Upgrade(KitCase):
     def upgrade(self, version: str) -> None:
         self.new_kit(version)
         self.apply_ok(self.repo, "--high-stakes")
-        self.assertIn(f"Standards: dev-ai-standards v{version} ", (self.repo / "AGENTS.md").read_text())
+        self.assertIn(
+            f"Standards: dev-ai-standards v{version} ", (self.repo / "AGENTS.md").read_text()
+        )
 
     def test_upgrade_pr_passes(self) -> None:
         self.upgrade("0.2.0")
@@ -54,7 +56,7 @@ class Upgrade(KitCase):
         commit(self.repo, self.home, msg("Kit v0.2.0 and code"), {"src/app.py": "print(1)\n"})
         r = self.rules(self.repo)
         self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertIn("kit upgrade PRs may change only kit files, the manifest and the Standards line", r.stdout)
+        self.assertIn("kit upgrade PRs may change only docs/standards/**", r.stdout)
         self.assertIn("src/app.py", r.stdout)
         self.assertIn("AGENTS.md#core: block edited", r.stdout)
 
@@ -111,7 +113,8 @@ class Hook(KitCase):
         self.assertIn("core.hooksPath is 'my-hooks'", out)
         self.assertIn(HOOK_LINE, out)
         out = self.apply_ok(repo)
-        self.assertIn("Add this line to my-hooks/commit-msg:", out)
+        self.assertIn("to my-hooks/commit-msg:", out)
+        self.assertIn("to my-hooks/pre-commit:", out)
         self.assertIn(HOOK_LINE, out)
         self.assertEqual(self.hooks_path(repo), "my-hooks")
         self.assertFalse((repo / ".githooks").exists())
@@ -133,7 +136,11 @@ class Hook(KitCase):
         commit(repo, self.home, msg("Apply standards"))
         (repo / "a.txt").write_text("a\n")
         git(repo, self.home, "add", "a.txt")
-        r = run(["git", "commit", "-q", "-m", f"Two\n\n{CLAUDE_TRAILER}\n{CODEX_TRAILER}"], repo, self.home)
+        r = run(
+            ["git", "commit", "-q", "-m", f"Two\n\n{CLAUDE_TRAILER}\n{CODEX_TRAILER}"],
+            repo,
+            self.home,
+        )
         self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("trailer_check: FAIL", r.stderr)
         r = run(["git", "commit", "-q", "-m", msg("One")], repo, self.home)

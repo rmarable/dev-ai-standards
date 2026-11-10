@@ -1,0 +1,21 @@
+# Ruff settings for the kit's own code: the same rules as templates/ruff.toml (from ecf), but
+# target py39, since kit scripts must run on the stock macOS Python 3.9 (K1-14, G2).
+# bin/ and scripts/ tools have no .py extension: scripts/check passes them to Ruff by name.
+line-length = 100
+target-version = "py39"
+# templates/ holds unrendered project files ({{python_target}}, guarded scripts/check).
+extend-exclude = ["templates", "planning-docs"]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PL", "S", "T20"]
+ignore = ["PLR2004"]
+
+[lint.pylint]
+max-args = 8
+
+[lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "S105", "S106", "S108", "S603", "S607"]
+"scripts/**" = ["T201", "S603", "S607"]
+# The kit's command-line tools print by design and run git, gh and python by argv list.
+"bin/**" = ["T201", "S603", "S607"]
+"checks/**" = ["T201", "S603", "S607"]

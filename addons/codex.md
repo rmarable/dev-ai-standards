@@ -28,8 +28,9 @@ write.
 
 ## Claude only (`CLAUDE.md`)
 
-- The SessionStart hook lists every worktree from `git worktree list` that holds a `HANDOFF.md`.
-  Tell the operator about each, and ask before acting on any.
+- The SessionStart hook lists every worktree from `git worktree list` that holds a `HANDOFF.md`
+  (installed by the claude-codex-integration skill, step 3; not by `apply`). Tell the operator about
+  each, and ask before acting on any.
 
 ## Codex's side
 
@@ -51,7 +52,7 @@ write.
 
 ## Task brief
 
-`templates/task-brief.md`, written to `planning-docs/<ID>/`: goal, files in scope, acceptance
+`docs/standards/templates/task-brief.md`, written to `planning-docs/<ID>/`: goal, files in scope, acceptance
 commands and expected result, out of scope, reserved items, plan and IDs, and "write `HANDOFF.md`;
 don't commit".
 
@@ -63,8 +64,10 @@ don't commit".
    `git status --porcelain --untracked-files=all` and `git diff HEAD`: reserved list not crossed,
    CHANGELOG line, tests, placeholders.
 3. Assign real numbers for every `-NEW` placeholder.
-4. Stage explicit paths. Commit with `git -c core.hooksPath=/dev/null commit`: the Handoff block
-   above the Codex trailer, no other trailer. Re-check the commit.
+4. Stage explicit paths. With hooks off nothing runs on its own, so first run `scripts/check` and
+   `python3 docs/standards/checks/secret_scan.py --staged`; stop on any failure. Commit with
+   `git -c core.hooksPath=/dev/null commit`: the Handoff block above the Codex trailer, no other
+   trailer. Re-check the commit.
 5. Push with main's hooks: `git -c core.hooksPath=<absolute path of the main checkout>/.githooks
    push`. Those hooks call the main checkout's scripts, first verified unchanged from
    `origin/main`. Codex-edited hooks never run. CI doesn't count as a pre-publication check for the
@@ -79,7 +82,7 @@ Abandoned branches: the handoff, last commit and reason go to
 
 ## Setup
 
-- `snippets/codex-config.toml` holds defaults, not a security control (`sandbox_mode`,
+- `docs/standards/snippets/codex-config.toml` holds defaults, not a security control (`sandbox_mode`,
   `approval_policy`, `model`, `model_reasoning_effort`, `features.memories = false`), shipped as
   project `.codex/config.toml`. It loads only in a trusted project; only a managed
   `requirements.toml` binds. Whether a new linked worktree counts as trusted: unproven until A4.

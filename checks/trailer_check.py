@@ -61,7 +61,7 @@ def check_message(msg: str, strip_comments: bool = False) -> list[str]:
 
 
 def git(repo: Path, *args: str) -> str:
-    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=False)
     if r.returncode != 0:
         raise RuntimeError(f"git {' '.join(args[:2])} failed: {r.stderr.strip()[:200]}")
     return r.stdout
@@ -71,8 +71,8 @@ def commits(repo: Path, rev_args: list[str]) -> list[tuple[str, list[str], str]]
     """(sha, parents, message) for each commit selected by rev_args, oldest first."""
     out = git(repo, "log", "--reverse", "--format=%H%x1f%P%x1f%B%x1e", *rev_args)
     result: list[tuple[str, list[str], str]] = []
-    for rec in out.split("\x1e"):
-        rec = rec.lstrip("\n")
+    for raw in out.split("\x1e"):
+        rec = raw.lstrip("\n")
         if not rec:
             continue
         sha, parents, body = rec.split("\x1f", 2)
@@ -84,21 +84,26 @@ def github_lookup(repo_slug: str) -> MetaLookup:
     """Commit metadata (logins, verified signature) from the GitHub REST API."""
     token = os.environ.get("GITHUB_TOKEN", "")
     api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+    if not api.startswith("https://"):
+        raise RuntimeError(f"GITHUB_API_URL must be https, not {api[:40]!r}")
 
     def lookup(sha: str) -> Meta | None:
-        req = urllib.request.Request(f"{api}/repos/{repo_slug}/commits/{sha}")
+        url = f"{api}/repos/{repo_slug}/commits/{sha}"
+        req = urllib.request.Request(url)  # noqa: S310 (https only, checked above)
         req.add_header("Accept", "application/vnd.github+json")
         if token:
             req.add_header("Authorization", f"Bearer {token}")
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 (https only)
                 data = json.load(resp)
         except OSError:
             return None
         return {
             "author_login": (data.get("author") or {}).get("login"),
             "committer_login": (data.get("committer") or {}).get("login"),
-            "verified": bool(((data.get("commit") or {}).get("verification") or {}).get("verified")),
+            "verified": bool(
+                ((data.get("commit") or {}).get("verification") or {}).get("verified")
+            ),
         }
 
     return lookup
@@ -106,7 +111,7 @@ def github_lookup(repo_slug: str) -> MetaLookup:
 
 def file_lookup(path: str) -> MetaLookup:
     data = json.loads(Path(path).read_text())
-    return lambda sha: data.get(sha)
+    return data.get
 
 
 def exemption(
@@ -125,20 +130,39 @@ def exemption(
     return None
 
 
-def push_range(repo: Path, before: str, after: str, ref: str, base_ref: str) -> tuple[list[str], bool]:
+def push_range(
+    repo: Path, before: str, after: str, ref: str, base_ref: str
+) -> tuple[list[str], bool]:
     """git log arguments for the commits a push adds, and whether it creates the base branch."""
     if after == ZERO:
         return [], False
-    base_name = base_ref.split("/")[-1]
+    base_name = base_ref.rsplit("/", maxsplit=1)[-1]
     creates_main = before == ZERO and ref in (f"refs/heads/{base_name}", base_name)
     if before != ZERO:
-        known = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", f"{before}^{{commit}}"]).returncode == 0
+        known = (
+            subprocess.run(
+                ["git", "-C", str(repo), "cat-file", "-e", f"{before}^{{commit}}"],
+                capture_output=True,
+                check=False,
+            ).returncode
+            == 0
+        )
         if known:
             return [f"{before}..{after}"], False
+        if ref in (f"refs/heads/{base_name}", base_name):
+            # A force push to the base branch: the old tip wasn't fetched, and the merge-base
+            # with the base ref would be `after` itself, checking nothing (K1-3).
+            raise RuntimeError(
+                f"before {before[:12]} not found on a push to {base_name} (force push?); can't"
+                " tell which commits are new"
+            )
     if creates_main:
         return [after], True
     mb = subprocess.run(
-        ["git", "-C", str(repo), "merge-base", after, base_ref], capture_output=True, text=True
+        ["git", "-C", str(repo), "merge-base", after, base_ref],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if mb.returncode == 0 and mb.stdout.strip():
         return [f"{mb.stdout.strip()}..{after}"], False
@@ -167,12 +191,24 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--message-file", help="check one message file (commit-msg hook: pass $1)")
     mode.add_argument("--commit", help="check one commit")
     mode.add_argument("--range", help="check every commit in A..B")
-    mode.add_argument("--push", nargs=2, metavar=("BEFORE", "AFTER"), help="CI: check the commits a push adds")
+    mode.add_argument(
+        "--push", nargs=2, metavar=("BEFORE", "AFTER"), help="CI: check the commits a push adds"
+    )
     ap.add_argument("--ref", default="", help="with --push: the pushed ref (e.g. refs/heads/main)")
-    ap.add_argument("--base-ref", default="origin/main", help="branch new branches are measured from (default origin/main)")
+    ap.add_argument(
+        "--base-ref",
+        default="origin/main",
+        help="branch new branches are measured from (default origin/main)",
+    )
     ap.add_argument("--repo", default=".", help="git repository (default .)")
-    ap.add_argument("--github-repo", help="OWNER/REPO: look up logins and signatures for the exemptions (uses GITHUB_TOKEN)")
-    ap.add_argument("--meta", help="JSON file {sha: {author_login, committer_login, verified}} instead of the API")
+    ap.add_argument(
+        "--github-repo",
+        help="OWNER/REPO: look up logins and signatures for the exemptions (uses GITHUB_TOKEN)",
+    )
+    ap.add_argument(
+        "--meta",
+        help="JSON file {sha: {author_login, committer_login, verified}} instead of the API",
+    )
     args = ap.parse_args(argv)
 
     if args.message_file:
@@ -180,7 +216,10 @@ def main(argv: list[str] | None = None) -> int:
         for p in problems:
             print(f"trailer_check: FAIL {p}", file=sys.stderr)
         if problems:
-            print(f"trailer_check: the trailer must be exactly one of: {ALLOWED[0]} | {ALLOWED[1]}", file=sys.stderr)
+            print(
+                f"trailer_check: the trailer must be exactly one of: {ALLOWED[0]} | {ALLOWED[1]}",
+                file=sys.stderr,
+            )
             return 1
         return 0
 
@@ -188,16 +227,18 @@ def main(argv: list[str] | None = None) -> int:
     meta: MetaLookup | None = None
     if args.meta:
         meta = file_lookup(args.meta)
-    elif args.github_repo:
-        meta = github_lookup(args.github_repo)
     try:
+        if args.github_repo and not args.meta:
+            meta = github_lookup(args.github_repo)
         creates_main = False
         if args.commit:
             rev_args = ["-1", args.commit]
         elif args.range:
             rev_args = [args.range]
         else:
-            rev_args, creates_main = push_range(repo, args.push[0], args.push[1], args.ref, args.base_ref)
+            rev_args, creates_main = push_range(
+                repo, args.push[0], args.push[1], args.ref, args.base_ref
+            )
         count, failures = check_commits(repo, rev_args, meta, creates_main)
     except RuntimeError as e:
         print(f"trailer_check: error: {e}", file=sys.stderr)

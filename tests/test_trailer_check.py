@@ -43,7 +43,9 @@ class TrailerCheck(unittest.TestCase):
         self.assertEqual(self.check_msg(f"Fix x\n\n{CLAUDE_TRAILER}\n{CODEX_TRAILER}\n"), 1)
 
     def test_message_model_name_or_none_fails(self) -> None:
-        self.assertEqual(self.check_msg("Fix x\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n"), 1)
+        self.assertEqual(
+            self.check_msg("Fix x\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n"), 1
+        )
         self.assertEqual(self.check_msg("Fix x\n"), 1)
 
     def test_message_comment_lines_ignored(self) -> None:
@@ -58,7 +60,9 @@ class TrailerCheck(unittest.TestCase):
         self.assertEqual(self.tc(repo, "--range", f"{a}..{good}").returncode, 0)
         bad = commit(repo, self.home, f"C\n\n{CLAUDE_TRAILER}\n{CLAUDE_TRAILER}", {"c": "1"})
         self.assertEqual(self.tc(repo, "--range", f"{a}..{bad}").returncode, 1)
-        self.assertEqual(self.tc(repo, "--push", good, bad, "--ref", "refs/heads/feature").returncode, 1)
+        self.assertEqual(
+            self.tc(repo, "--push", good, bad, "--ref", "refs/heads/feature").returncode, 1
+        )
         self.assertEqual(self.tc(repo, "--commit", good).returncode, 0)
 
     def test_new_branch_skips_old_history_and_deletion_checks_nothing(self) -> None:
@@ -106,12 +110,20 @@ class TrailerCheck(unittest.TestCase):
             return self.tc(repo, "--range", f"{base}..{merge}", "--meta", str(meta)).returncode
 
         good = {
-            dep: {"author_login": "dependabot[bot]", "committer_login": "web-flow", "verified": True},
+            dep: {
+                "author_login": "dependabot[bot]",
+                "committer_login": "web-flow",
+                "verified": True,
+            },
             merge: {"author_login": "someone", "committer_login": "web-flow", "verified": True},
         }
         self.assertEqual(run(good), 0)
         self.assertEqual(run({**good, dep: {**good[dep], "verified": False}}), 1)
-        self.assertEqual(run({**good, merge: {**good[merge], "verified": False}}), 1, "unsigned GitHub-named commit")
+        self.assertEqual(
+            run({**good, merge: {**good[merge], "verified": False}}),
+            1,
+            "unsigned GitHub-named commit",
+        )
 
 
 if __name__ == "__main__":

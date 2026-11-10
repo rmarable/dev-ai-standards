@@ -11,6 +11,9 @@ its approvers in its own `AGENTS.md` text; this file never names a project.
   don't merge).
 - Read `docs/standards/addons/high-stakes.md` before a review, a gate run, a release, a
   real-service test or heavy shared work.
+- Run `gate-status` only as the base branch's copy, never the checkout's: `git fetch origin && git
+  show origin/main:docs/standards/bin/gate-status > "$TMPDIR/gate-status" && python3
+  "$TMPDIR/gate-status" <args>`.
 
 ## Reviews
 
@@ -79,7 +82,10 @@ sessions still apply without asking. If a peer doesn't answer, tell the operator
 
 ## Local-gate status (PR projects with a local gate)
 
-- Required, with up-to-date branches. Only Claude posts it, through `bin/gate-status`.
+- Required, with up-to-date branches. Only Claude posts it, through `docs/standards/bin/gate-status`,
+  always the base branch's copy, never the checkout's: `git fetch origin && git show
+  origin/main:docs/standards/bin/gate-status > "$TMPDIR/gate-status" && python3
+  "$TMPDIR/gate-status" --check` (then `--docs-only` or `--passed N --skipped 0`).
 - The script and the docs-only list are always read from the base branch (`origin/main`, after
   `git fetch`), never from the PR's branch; the PR head can't change either.
 - Docs only is decided on `git diff --no-renames --raw origin/main...HEAD` (or `--name-status -M`
@@ -87,7 +93,7 @@ sessions still apply without asking. If a peer doesn't answer, tell the operator
   submodules, symlinks and deletions are docs only only if every path involved is on the list.
 - Docs only: success "docs only, no <gate> gate". Otherwise only after the real full run, on a
   clean tree with `HEAD` equal to the PR head: "N passed, 0 skipped".
-- Before the merge ask, `bin/gate-status --verify` checks the status's creator is the operator's
+- Before the merge ask, `gate-status --verify` (same base copy) checks the status's creator is the operator's
   login and no check run has its name.
 
 ## Real-service tests

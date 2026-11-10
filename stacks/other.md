@@ -11,5 +11,10 @@ For projects that are neither Python nor IaC, or are mixed. The kit adds no tool
 
 - The commands for build, lint, type check and tests, and which of them are "affected only" while
   working and which make the full suite (core).
+- Use the stack's standard formatter and linter in check mode in `scripts/check` (e.g. Prettier,
+  gofmt).
 - Where secrets live (core: a secret store only).
+- Add a test workflow for the stack on the same pattern as the kit's
+  `docs/standards/templates/ci/python.yml` (pinned actions, read-only permissions, never a
+  required check if path-filtered).
 - If the project grows into Python or IaC, re-run `apply` with that stack.

@@ -35,10 +35,19 @@ class KitCase(unittest.TestCase):
         return r.stdout
 
     def drift(self, target: Path, *flags: str):
-        return py(self.kit / "bin" / "dev-ai-standards", "drift", *flags, str(target), cwd=self.home, home=self.home)
+        return py(
+            self.kit / "bin" / "dev-ai-standards",
+            "drift",
+            *flags,
+            str(target),
+            cwd=self.home,
+            home=self.home,
+        )
 
     def rules(self, target: Path, *flags: str):
-        return py(self.kit / "checks" / "rules_check.py", *flags, str(target), cwd=target, home=self.home)
+        return py(
+            self.kit / "checks" / "rules_check.py", *flags, str(target), cwd=target, home=self.home
+        )
 
     def edit(self, path: Path, old: str, new: str) -> None:
         text = path.read_text()
@@ -128,12 +137,18 @@ class Apply(KitCase):
         self.assertIn("Risk area", full_text)
         self.assertIn("dev-ai-standards:begin codex", (full / "CLAUDE.md").read_text())
         self.assertIn(
-            "Standards: dev-ai-standards v0.1.0 (core, high-stakes, codex; stack python)\n", full_text
+            "Standards: dev-ai-standards v0.1.0 (core, high-stakes, codex; stack python)\n",
+            full_text,
         )
 
     def test_pr_and_no_pr_conditions(self) -> None:
         tmpl = self.kit / "templates" / "AGENTS.md"
-        self.edit(tmpl, "## Overrides\n", "<!-- if pr -->\nMerges by PR.\n<!-- endif -->\n<!-- if no-pr -->\nMerges locally.\n<!-- endif -->\n## Overrides\n")
+        self.edit(
+            tmpl,
+            "## Overrides\n",
+            "<!-- if pr -->\nMerges by PR.\n<!-- endif -->\n<!-- if no-pr -->\nMerges"
+            " locally.\n<!-- endif -->\n## Overrides\n",
+        )
         a, b = self.tmp / "a", self.tmp / "b"
         a.mkdir()
         b.mkdir()
@@ -148,7 +163,13 @@ class Apply(KitCase):
         p = self.tmp / "myproj"
         p.mkdir()
         self.apply_ok(p)
-        for f in ("AGENTS.md", "CLAUDE.md", "CHANGELOG.md", "planning-docs/README.md", "CLAUDE-STATE.md"):
+        for f in (
+            "AGENTS.md",
+            "CLAUDE.md",
+            "CHANGELOG.md",
+            "planning-docs/README.md",
+            "CLAUDE-STATE.md",
+        ):
             self.assertIsNone(re.search(r"(?<!\$)\{\{", (p / f).read_text()), f)
         self.assertIn("myproj: <what it is", (p / "AGENTS.md").read_text())
         self.assertIn("v0.1.0 (core; stack other)", (p / "CHANGELOG.md").read_text())
@@ -175,7 +196,9 @@ class Apply(KitCase):
         agents = (p / "AGENTS.md").read_text()
         self.assertIn("My project rule.", agents)
         self.assertIn("dev-ai-standards:begin core", agents)
-        self.assertEqual(agents.splitlines()[2], "Standards: dev-ai-standards v0.1.0 (core, codex; stack other)")
+        self.assertEqual(
+            agents.splitlines()[2], "Standards: dev-ai-standards v0.1.0 (core, codex; stack other)"
+        )
         self.assertEqual((p / "CHANGELOG.md").read_text(), "# My changelog\n")
         gi = (p / ".gitignore").read_text()
         self.assertTrue(gi.startswith("build/\n"))
@@ -185,7 +208,9 @@ class Apply(KitCase):
     def test_settings_merged_not_replaced(self) -> None:
         p = self.tmp / "p"
         (p / ".claude").mkdir(parents=True)
-        (p / ".claude/settings.json").write_text(json.dumps({"permissions": {"ask": ["Bash(rm *)"]}, "model": "x"}))
+        (p / ".claude/settings.json").write_text(
+            json.dumps({"permissions": {"ask": ["Bash(rm *)"]}, "model": "x"})
+        )
         self.apply_ok(p)
         s = json.loads((p / ".claude/settings.json").read_text())
         self.assertEqual(s["model"], "x")
@@ -216,7 +241,14 @@ class Apply(KitCase):
         p.mkdir()
         self.apply_ok(p)
         (p / "docs/standards/refs/honesty.md").write_text("better\n")
-        r = py(self.kit / "bin/dev-ai-standards", "promote", "refs/honesty.md", str(p), cwd=self.home, home=self.home)
+        r = py(
+            self.kit / "bin/dev-ai-standards",
+            "promote",
+            "refs/honesty.md",
+            str(p),
+            cwd=self.home,
+            home=self.home,
+        )
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("gh pr create --repo rmarable/dev-ai-standards", r.stdout)
         self.assertIn("+better", r.stdout)
@@ -230,7 +262,11 @@ class RulesCheck(KitCase):
         commit(self.repo, self.home, msg("Apply standards"))
 
     def test_pass_and_overrides_listed(self) -> None:
-        self.edit(self.repo / "AGENTS.md", "## Overrides\n", "## Overrides\n\n- core: merges stay local (testing doc)\n")
+        self.edit(
+            self.repo / "AGENTS.md",
+            "## Overrides\n",
+            "## Overrides\n\n- core: merges stay local (testing doc)\n",
+        )
         r = self.rules(self.repo)
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("manifest: main:docs/standards/manifest", r.stdout)
@@ -246,7 +282,11 @@ class RulesCheck(KitCase):
         self.assertEqual(self.rules(self.repo, "--budget", "100").returncode, 1)
 
     def test_read_before_path_missing_fails(self) -> None:
-        self.edit(self.repo / "AGENTS.md", "| <project task> | <project file> |", "| deploy | `docs/deploy.md` |")
+        self.edit(
+            self.repo / "AGENTS.md",
+            "| <project task> | <project file> |",
+            "| deploy | `docs/deploy.md` |",
+        )
         r = self.rules(self.repo)
         self.assertEqual(r.returncode, 1)
         self.assertIn("read-before table path missing: docs/deploy.md", r.stdout)
@@ -260,12 +300,16 @@ class RulesCheck(KitCase):
         agents = self.repo / "AGENTS.md"
         self.edit(agents, "1. Don't lie.", "1. Lie when useful.")
         body = re.search(
-            r"<!-- dev-ai-standards:begin core -->(.*?)<!-- dev-ai-standards:end core -->", agents.read_text(), re.S
+            r"<!-- dev-ai-standards:begin core -->(.*?)<!-- dev-ai-standards:end core -->",
+            agents.read_text(),
+            re.S,
         )
         assert body
         new_hash = hashlib.sha256(body.group(1).encode()).hexdigest()
         mpath = self.repo / "docs/standards/manifest"
-        mpath.write_text(re.sub(r"(?m)^[0-9a-f]{64}(  AGENTS\.md#core)$", new_hash + r"\1", mpath.read_text()))
+        mpath.write_text(
+            re.sub(r"(?m)^[0-9a-f]{64}(  AGENTS\.md#core)$", new_hash + r"\1", mpath.read_text())
+        )
         commit(self.repo, self.home, msg("Edit core and manifest"))
         r = self.rules(self.repo)
         self.assertEqual(r.returncode, 1)

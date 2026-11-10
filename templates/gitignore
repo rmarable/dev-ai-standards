@@ -5,5 +5,12 @@ CLAUDE.local.md
 state-archive/
 .claude/settings.local.json
 
+# Secrets: never committed (core). Keep a .env.example with names only.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
 # Operating system
 .DS_Store

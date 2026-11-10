@@ -2,12 +2,16 @@
 """scripts/check: runs exactly what the kit's CI runs.
 
 Implements P001 Part A core ("`scripts/check [--full]` runs exactly what CI runs") and the kit
-CI cap on `core.md` (`wc -w core.md` <= 600). For the kit, --full runs the same steps.
+CI cap on `core.md` (`wc -w core.md` <= 600). For the kit, --full runs the same steps. Also Ruff
+through `uvx` (G2), ShellCheck on the kit's shell files (G4), and the tests under
+`/usr/bin/python3` as well, when it exists, since kit scripts must run on Python 3.9 (K1-14).
+Missing tools print a visible "skipped" line, never a silent pass.
 """
 
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -21,8 +25,13 @@ SCRIPTS = (
     "checks/trailer_check.py",
     "checks/rules_check.py",
     "checks/state_check.py",
+    "checks/secret_scan.py",
+    "checks/shell_lint.py",
+    "checks/pre_commit.py",
     "scripts/check",
 )
+RUFF_PATHS = ("bin", "checks", "scripts", "tests")
+SYSTEM_PYTHON = Path("/usr/bin/python3")
 
 
 def step(name: str, ok: bool, detail: str = "") -> bool:
@@ -34,7 +43,9 @@ def core_words() -> bool:
     core = ROOT / "core.md"
     if not core.is_file():
         return step("core.md word cap", False, "core.md missing")
-    r = subprocess.run(["wc", "-w"], stdin=core.open("rb"), capture_output=True, text=True)
+    r = subprocess.run(
+        ["wc", "-w"], stdin=core.open("rb"), capture_output=True, text=True, check=False
+    )
     words = int(r.stdout.split()[0])
     return step("core.md word cap", words <= CORE_CAP, f"{words} of {CORE_CAP} words (wc -w)")
 
@@ -48,7 +59,7 @@ def compile_scripts() -> bool:
             continue
         src = p.read_text()
         if "python" not in (src.splitlines() or [""])[0]:
-            r = subprocess.run(["sh", "-n", str(p)], capture_output=True, text=True)
+            r = subprocess.run(["sh", "-n", str(p)], capture_output=True, text=True, check=False)
             if r.returncode != 0:
                 ok = step(f"sh -n {rel}", False, r.stderr.strip()[:200]) and ok
             continue
@@ -59,16 +70,67 @@ def compile_scripts() -> bool:
     return step("scripts compile", ok) if ok else False
 
 
+def ruff_files() -> list[str]:
+    """Kit Python files for Ruff: *.py, plus the extensionless bin/ and scripts/ tools."""
+    out: list[str] = []
+    for d in RUFF_PATHS:
+        for p in sorted((ROOT / d).rglob("*")):
+            if p.is_file() and "__pycache__" not in p.parts:
+                first = (p.read_text(errors="replace").splitlines() or [""])[0]
+                if p.suffix == ".py" or (not p.suffix and "python" in first):
+                    out.append(p.relative_to(ROOT).as_posix())
+    return out
+
+
+def ruff() -> bool:
+    if shutil.which("uvx") is None:
+        print("check: skipped: uv not found (ruff format --check, ruff check)")
+        return True
+    files = ruff_files()
+    ok = True
+    for args in (["format", "--check"], ["check"]):
+        r = subprocess.run(["uvx", "ruff", *args, *files], cwd=ROOT, check=False)
+        ok = step(f"ruff {args[0]}", r.returncode == 0) and ok
+    return ok
+
+
+def shellcheck() -> bool:
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(ROOT / "checks"))
+    import shell_lint  # noqa: PLC0415 (path set just above)
+
+    files = shell_lint.all_shell_files(ROOT)
+    if shutil.which("shellcheck") is None:
+        print(f"check: skipped: {shell_lint.SKIP_LINE} ({len(files)} file(s))")
+        return True
+    return step(f"shellcheck ({len(files)} file(s))", shell_lint.run_shellcheck(ROOT, files) == 0)
+
+
 def unit_tests() -> bool:
-    r = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(ROOT / "tests")])
-    return step("unit tests", r.returncode == 0)
+    ok = True
+    pythons = [sys.executable]
+    if SYSTEM_PYTHON.is_file() and SYSTEM_PYTHON.resolve() != Path(sys.executable).resolve():
+        pythons.append(str(SYSTEM_PYTHON))
+    else:
+        print(f"check: skipped: {SYSTEM_PYTHON} not found or same as this Python (3.9 test run)")
+    for py in pythons:
+        r = subprocess.run(
+            [py, "-m", "unittest", "discover", "-s", str(ROOT / "tests")], check=False
+        )
+        ok = step(f"unit tests ({py})", r.returncode == 0) and ok
+    return ok
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Run the kit's CI checks: core.md word cap, script compile, unit tests.")
+    ap = argparse.ArgumentParser(
+        description=(
+            "Run the kit's CI checks: core.md word cap, script compile, Ruff, ShellCheck and"
+            " unit tests."
+        )
+    )
     ap.add_argument("--full", action="store_true", help="same steps (the kit has no slower tier)")
     ap.parse_args(argv)
-    results = [core_words(), compile_scripts(), unit_tests()]
+    results = [core_words(), compile_scripts(), ruff(), shellcheck(), unit_tests()]
     if not all(results):
         print("check: failed", file=sys.stderr)
         return 1

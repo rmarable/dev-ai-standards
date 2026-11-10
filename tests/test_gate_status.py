@@ -2,7 +2,7 @@
 
 P001 Verification, "Enforcement": docs only only for docs-only PRs; refuses a dirty tree or stale
 head; refuses a PR that renames a script under a docs path, and one that widens the docs-only
-list (the base branch's list decides). Offline: --no-fetch, --dry-run, base `main`.
+list (the base branch's list decides). Offline: a fake `gh`, a local bare `origin`, --dry-run.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from helpers import apply, commit, git, init_repo, make_kit, msg, py
+from helpers import GateStatusRunner, apply, commit, git, init_repo, make_kit, msg
 
 
 class GateStatus(unittest.TestCase):
@@ -24,19 +24,22 @@ class GateStatus(unittest.TestCase):
         self.repo = init_repo(self.tmp / "repo", self.home)
         r = apply(kit, self.repo, self.home, "--high-stakes")
         self.assertEqual(r.returncode, 0, r.stderr)
-        commit(self.repo, self.home, msg("Apply standards"), {"src/tool.py": "print(1)\n", "planning-docs/a.md": "a\n"})
+        commit(
+            self.repo,
+            self.home,
+            msg("Apply standards"),
+            {"src/tool.py": "print(1)\n", "planning-docs/a.md": "a\n"},
+        )
+        self.runner = GateStatusRunner(self.tmp, self.home, self.repo)
         git(self.repo, self.home, "switch", "-q", "-c", "pr")
-        self.script = self.repo / "docs/standards/bin/gate-status"
+        self.script = self.runner.script
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
     def gs(self, *args: str):
         head = git(self.repo, self.home, "rev-parse", "HEAD")
-        return py(
-            self.script, "--base", "main", "--no-fetch", "--repo", "o/r", "--pr-head", head, *args,
-            cwd=self.repo, home=self.home,
-        )
+        return self.runner.offline("--pr-head", head, *args)
 
     def test_docs_only_pr_posts_docs_only(self) -> None:
         commit(self.repo, self.home, msg("Plan"), {"planning-docs/b.md": "b\n"})
@@ -69,8 +72,10 @@ class GateStatus(unittest.TestCase):
         self.assertIn("not on the base branch's docs-only list: src/tool.py", out)
 
     def test_branch_copy_of_script_is_not_used(self) -> None:
-        self.script.write_text(self.script.read_text().replace("def docs_only(entries", "def _real(entries", 1)
-                               + "\n\ndef docs_only(entries, recs):\n    return []\n")
+        self.script.write_text(
+            self.script.read_text().replace("def docs_only(entries", "def _real(entries", 1)
+            + "\n\ndef docs_only(entries, recs):\n    return []\n"
+        )
         commit(self.repo, self.home, msg("Loosen gate-status"), {"src/tool.py": "print(4)\n"})
         r = self.gs("--check")
         self.assertEqual(r.returncode, 1)
@@ -94,8 +99,7 @@ class GateStatus(unittest.TestCase):
         self.assertIn("not clean", r.stderr)
         (self.repo / "stray.txt").unlink()
         stale = git(self.repo, self.home, "rev-parse", "HEAD~1")
-        r = py(self.script, "--base", "main", "--no-fetch", "--repo", "o/r", "--pr-head", stale,
-               "--passed", "10", "--skipped", "0", "--dry-run", cwd=self.repo, home=self.home)
+        r = self.runner.offline("--pr-head", stale, "--passed", "10", "--skipped", "0", "--dry-run")
         self.assertEqual(r.returncode, 1)
         self.assertIn("is not the PR head", r.stderr)
 

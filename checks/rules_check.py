@@ -27,7 +27,11 @@ BLOCK_NAMES = (
     "other",
 )
 MANIFEST_PATH = "docs/standards/manifest"
+BLOCK_FILES = ("AGENTS.md", "CLAUDE.md")
 STANDARDS_DIR = "docs/standards"
+# The state-file path rule: kit text outside docs/standards/ (Claude Code reads rules only from
+# .claude/rules/). One fixed literal, in the manifest and the upgrade set (F1-9).
+STATE_RULE = ".claude/rules/state-file.md"
 DEFAULT_BUDGET = 24 * 1024
 BASE_CANDIDATES = ("origin/main", "main")
 
@@ -85,8 +89,35 @@ def block_contents(text: str) -> dict[str, str]:
     return {name: text[cs:ce] for name, _, cs, ce, _ in parse_blocks(text)}
 
 
+def manifest_key_problem(key: str) -> str | None:
+    """Why `key` can't be a manifest entry, or None.
+
+    Allowed: a plain relative path under docs/standards/ (not the manifest itself), the one
+    fixed path STATE_RULE, or AGENTS.md#<block> / CLAUDE.md#<block> with a known block name.
+    Nothing else, ever: the manifest never decides which other paths count as kit text (K1-2,
+    K1-5, F1-9).
+    """
+    if key == STATE_RULE:
+        return None
+    if "#" in key:
+        fname, _, name = key.partition("#")
+        if fname in BLOCK_FILES and name in BLOCK_NAMES:
+            return None
+        return "not AGENTS.md#<block> or CLAUDE.md#<block> with a known block name"
+    parts = key.split("/")
+    if (
+        "\\" in key
+        or key.startswith("/")
+        or any(p in ("", ".", "..") for p in parts)
+        or not key.startswith(STANDARDS_DIR + "/")
+        or key == MANIFEST_PATH
+    ):
+        return f"not a plain path under {STANDARDS_DIR}/"
+    return None
+
+
 def parse_manifest(text: str) -> dict[str, str]:
-    """Map path (or AGENTS.md#block) to sha256 hex."""
+    """Map path (or AGENTS.md#block) to sha256 hex. Refuses keys outside the fixed kit set."""
     entries: dict[str, str] = {}
     for n, line in enumerate(text.splitlines(), 1):
         if not line.strip():
@@ -94,6 +125,9 @@ def parse_manifest(text: str) -> dict[str, str]:
         m = re.fullmatch(r"([0-9a-f]{64})  (\S.*)", line)
         if not m:
             raise CheckError(f"manifest line {n} is malformed")
+        why = manifest_key_problem(m.group(2))
+        if why:
+            raise CheckError(f"manifest line {n}: '{m.group(2)[:80]}' is {why}")
         entries[m.group(2)] = m.group(1)
     return entries
 
@@ -114,7 +148,10 @@ def is_git_repo(root: Path) -> bool:
 
 
 def ref_exists(root: Path, ref: str) -> bool:
-    return git(root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False).returncode == 0
+    return (
+        git(root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False).returncode
+        == 0
+    )
 
 
 def show_file(root: Path, ref: str, path: str) -> str | None:
@@ -153,10 +190,7 @@ def load_manifest(
     return parse_manifest(path.read_text()), source_note
 
 
-BLOCK_FILES = ("AGENTS.md", "CLAUDE.md")
-
-
-def drift_findings(root: Path, manifest: dict[str, str]) -> list[str]:
+def drift_findings(root: Path, manifest: dict[str, str]) -> list[str]:  # noqa: PLR0912 (one pass per key kind)
     """Compare kit files and the kit blocks in AGENTS.md and CLAUDE.md with the manifest."""
     findings: list[str] = []
     blocks: dict[str, str] = {}
@@ -196,7 +230,10 @@ def drift_findings(root: Path, manifest: dict[str, str]) -> list[str]:
 
 STANDARDS_LINE_RE = re.compile(r"(?m)^Standards: dev-ai-standards v(\S+) \(.*\)[ \t]*$")
 VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?")
-UPGRADE_SCOPE_MSG = "kit upgrade PRs may change only kit files, the manifest and the Standards line"
+UPGRADE_SCOPE_MSG = (
+    "kit upgrade PRs may change only docs/standards/**, .claude/rules/state-file.md, and kit"
+    " blocks and the Standards line in AGENTS.md and CLAUDE.md"
+)
 
 
 def standards_version(text: str) -> str | None:
@@ -211,13 +248,13 @@ def semver_key(version: str) -> tuple[object, ...]:
         raise CheckError(f"'{version}' is not a semantic version")
     core = (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
     if m.group(4) is None:
-        return core + (1, ())
+        return (*core, 1, ())
     ids = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in m.group(4).split("."))
-    return core + (0, ids)
+    return (*core, 0, ids)
 
 
 def project_text(text: str, fname: str) -> str:
-    """The project-owned part of AGENTS.md or CLAUDE.md: kit blocks and the Standards line removed."""
+    """The project-owned part of AGENTS.md or CLAUDE.md: kit blocks and Standards line removed."""
     for _, start, _, _, end in reversed(parse_blocks(text)):
         text = text[:start] + text[end:]
     if fname == "AGENTS.md":
@@ -243,13 +280,21 @@ def resolve_base(root: Path, base: str | None) -> str | None:
     return next((r for r in BASE_CANDIDATES if ref_exists(root, r)), None)
 
 
-def upgrade_check(root: Path, base_manifest: dict[str, str], base: str | None) -> tuple[bool, list[str]]:
+def in_upgrade_set(path: str) -> bool:
+    """The fixed set a pure upgrade may touch; never derived from any manifest (K1-2, F1-9)."""
+    return path.startswith(STANDARDS_DIR + "/") or path in BLOCK_FILES or path == STATE_RULE
+
+
+def upgrade_check(  # noqa: PLR0912 (one linear command flow)
+    root: Path, base_manifest: dict[str, str], base: str | None
+) -> tuple[bool, list[str]]:
     """Decide whether this branch is a kit upgrade that may use its own manifest.
 
     Returns (True, [info]) when every condition holds, else (False, [reasons]). Conditions:
-    only kit files, the manifest, AGENTS.md and CLAUDE.md changed, and in those two only kit
-    block text and the Standards line; the Standards line names a strictly newer version than
-    the base's; the head's kit files and blocks match the head's manifest.
+    every changed path is under docs/standards/ (the manifest included) or is AGENTS.md or
+    CLAUDE.md, and in those two only kit block text and the Standards line changed; the
+    Standards line names a strictly newer version than the base's; the head's kit files and
+    blocks match the head's manifest (whose keys parse_manifest has already limited).
     """
     ref = resolve_base(root, base)
     if ref is None:
@@ -261,16 +306,13 @@ def upgrade_check(root: Path, base_manifest: dict[str, str], base: str | None) -
         head_manifest = parse_manifest(head_mpath.read_text())
     except CheckError as e:
         return False, [f"kit upgrade: head {e}"]
-    kit_paths = {k for k in (*base_manifest, *head_manifest) if "#" not in k}
     paths, since = changed_paths(root, ref)
     reasons: list[str] = []
-    outside = [
-        p
-        for p in paths
-        if not (p.startswith(STANDARDS_DIR + "/") or p in kit_paths or p in BLOCK_FILES)
-    ]
+    outside = [p for p in paths if not in_upgrade_set(p)]
     if outside:
-        shown = ", ".join(outside[:5]) + (f" and {len(outside) - 5} more" if len(outside) > 5 else "")
+        shown = ", ".join(outside[:5]) + (
+            f" and {len(outside) - 5} more" if len(outside) > 5 else ""
+        )
         reasons.append(f"{UPGRADE_SCOPE_MSG} (also changed: {shown})")
     for fname in BLOCK_FILES:
         if fname not in paths:
@@ -302,15 +344,21 @@ def upgrade_check(root: Path, base_manifest: dict[str, str], base: str | None) -
         else:
             if not newer:
                 reasons.append(
-                    f"kit upgrade PRs must name a strictly newer version on the Standards line (base v{old_v}, this branch v{new_v})"
+                    "kit upgrade PRs must name a strictly newer version on the Standards line"
+                    f" (base v{old_v}, this branch v{new_v})"
                 )
     head_findings = drift_findings(root, head_manifest)
     if head_findings:
-        reasons.append(f"kit upgrade: kit files and blocks don't match this branch's manifest ({len(head_findings)} finding(s))")
+        reasons.append(
+            "kit upgrade: kit files and blocks don't match this branch's manifest"
+            f" ({len(head_findings)} finding(s))"
+        )
         reasons.extend(f"  {f}" for f in head_findings)
     if reasons:
         return False, reasons
-    return True, [f"kit upgrade v{old_v} -> v{new_v}: using this branch's manifest (only kit text changed)"]
+    return True, [
+        f"kit upgrade v{old_v} -> v{new_v}: using this branch's manifest (only kit text changed)"
+    ]
 
 
 def is_upgrade_attempt(root: Path, base_manifest: dict[str, str], base: str | None) -> bool:
@@ -332,15 +380,24 @@ def is_upgrade_attempt(root: Path, base_manifest: dict[str, str], base: str | No
 def kit_findings(
     root: Path, manifest: dict[str, str], source: str, base: str | None
 ) -> tuple[list[str], list[str]]:
-    """(findings, info) for kit files and blocks against the trusted manifest, with the upgrade rule."""
+    """(findings, info) for kit files and blocks against the trusted manifest, with upgrades.
+
+    A branch whose manifest or Standards version differs from the base's always goes through
+    the upgrade rule, even when its kit text still matches the base manifest: a manifest edit
+    outside an upgrade fails (K1-5).
+    """
     findings = drift_findings(root, manifest)
     from_base = not source.startswith("working copy")
-    if not (findings and from_base and is_upgrade_attempt(root, manifest, base)):
+    if not (from_base and is_upgrade_attempt(root, manifest, base)):
         return findings, []
     ok, lines = upgrade_check(root, manifest, base)
     if ok:
         return [], lines
-    return ["kit upgrade refused; checked against the base manifest instead:", *lines, *findings], []
+    head = (
+        "the manifest or the Standards line changed outside a valid kit upgrade; checked against"
+        " the base manifest instead:"
+    )
+    return [f"kit upgrade refused: {head}", *lines, *findings], []
 
 
 def overrides(text: str) -> tuple[list[tuple[str, str]], list[str]]:
@@ -396,8 +453,8 @@ def read_before_paths(text: str) -> list[str]:
         if all(re.fullmatch(r":?-{3,}:?", c) for c in cells if c):
             continue
         if col < len(cells):
-            for token in PATHLIKE_RE.findall(cells[col]):
-                token = token.split("#", 1)[0].removeprefix("./")
+            for raw in PATHLIKE_RE.findall(cells[col]):
+                token = raw.split("#", 1)[0].removeprefix("./")
                 if "://" in token or "*" in token or not token:
                     continue
                 if "/" in token or re.search(r"\.[A-Za-z0-9]+$", token):
@@ -405,8 +462,41 @@ def read_before_paths(text: str) -> list[str]:
     return paths
 
 
+def strip_unloaded(text: str) -> str:
+    """Text with HTML comments and fenced code blocks removed: Claude Code evaluates no
+    imports there (K1-8)."""
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    out: list[str] = []
+    fence: str | None = None
+    for ln in text.splitlines():
+        m = re.match(r"\s{0,3}(`{3,}|~{3,})", ln)
+        if fence is None and m:
+            fence = m.group(1)
+            continue
+        if fence is not None:
+            if ln.strip().startswith(fence[0] * len(fence)) and not ln.strip().strip(fence[0]):
+                fence = None
+            continue
+        out.append(ln)
+    return "\n".join(out)
+
+
 def has_import(claude_md: str) -> bool:
-    return any(ln.strip() == "@AGENTS.md" for ln in claude_md.splitlines())
+    return any(ln.strip() == "@AGENTS.md" for ln in strip_unloaded(claude_md).splitlines())
+
+
+# Kit rows every read-before table must carry when the file is in the trusted manifest (K2-3).
+KIT_READ_BEFORE = (
+    "docs/standards/refs/honesty.md",
+    "docs/standards/refs/outside-sources.md",
+    "docs/standards/checks/README.md",
+    "docs/standards/refs/diff-review.md",
+)
+
+
+def missing_kit_rows(text: str, manifest: dict[str, str]) -> list[str]:
+    have = set(read_before_paths(text))
+    return [p for p in KIT_READ_BEFORE if p in manifest and p not in have]
 
 
 def run_checks(
@@ -430,17 +520,35 @@ def run_checks(
         failures.append(f"AGENTS.md is {size} bytes, over the {budget}-byte budget")
     else:
         info.append(f"AGENTS.md {size} of {budget} bytes")
-    for p in read_before_paths(text):
-        if not (root / p).exists():
-            failures.append(f"read-before table path missing: {p}")
+    missing_paths = [p for p in read_before_paths(text) if not (root / p).exists()]
+    upgrade_ok = False
     try:
         manifest, source = load_manifest(root, base, manifest_file)
         info.append(f"manifest: {source}")
+        ref = resolve_base(root, base)
+        if ref is not None:
+            sha = git(root, "rev-parse", "--short", f"{ref}^{{commit}}", check=False).stdout.strip()
+            info.append(f"compared with {ref} ({sha or 'unknown'})")
         findings, notes = kit_findings(root, manifest, source, base)
+        # Notes come back only for a valid kit upgrade.
+        upgrade_ok = bool(notes)
         info.extend(notes)
         failures.extend(findings)
+        failures.extend(
+            f"read-before table has no row for {p} (kit row)"
+            for p in missing_kit_rows(text, manifest)
+        )
     except CheckError as e:
         failures.append(str(e))
+    # A valid upgrade may remove a kit file its row names; the row is project text the upgrade
+    # can't edit, so a later PR drops it (F1-11).
+    for p in missing_paths:
+        if upgrade_ok and p in KIT_READ_BEFORE:
+            info.append(
+                f"read-before kit row {p}: file removed by this kit upgrade; drop the row next"
+            )
+        else:
+            failures.append(f"read-before table path missing: {p}")
     found, problems = overrides(text)
     failures.extend(problems)
     if found:
@@ -458,11 +566,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("dir", nargs="?", default=".", help="project root (default: .)")
     ap.add_argument(
         "--base",
-        help="base ref: holds the trusted manifest unless --manifest is given, and is what a kit upgrade is compared with (default: origin/main, then main)",
+        help=(
+            "base ref: holds the trusted manifest unless --manifest is given, and is what a kit"
+            " upgrade"
+            " is compared with (default: origin/main, then main). CI passes the PR base, or on a"
+            " push"
+            " the commit before the push"
+        ),
     )
     ap.add_argument("--manifest", help="read the trusted manifest from this file instead")
     ap.add_argument(
-        "--budget", type=int, default=DEFAULT_BUDGET, help=f"AGENTS.md size budget in bytes (default {DEFAULT_BUDGET})"
+        "--budget",
+        type=int,
+        default=DEFAULT_BUDGET,
+        help=f"AGENTS.md size budget in bytes (default {DEFAULT_BUDGET})",
     )
     args = ap.parse_args(argv)
     root = Path(args.dir).resolve()

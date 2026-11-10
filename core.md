@@ -1,4 +1,4 @@
-# Core
+## Core
 
 1. Don't lie.
 2. Don't make up facts; a verified fact cites source (or command) and date; unknown says so.
@@ -16,22 +16,22 @@
 - `scripts/check [--full]` runs exactly what CI runs.
 - Secrets only in a secret store, never in repo, environment or files.
 
-## Enforcement
+### Enforcement
 
 GitHub refuses, CI reports, the rest are reminders.
 
 - **Ruleset** on `main` and `v*` tags, no bypass list, turned on by the operator (or the launcher at their y/N); agents never change remote settings. Default: no force push or deletion; PR required; only rules-check required (high-stakes adds the local-gate status; never a path-filtered workflow). `--no-pr`: no force push or deletion, nothing required. GitHub Free can't protect private repos (unverified): the launcher skips the ruleset and says so.
 - **Rules-check workflow:** no path filter, every push and PR; `trailer_check` and `rules_check` with `checks/` and manifest from `main`. Detection only.
-- **Merge check** (Claude, before staging Codex work and before every merge ask): name changed enforcement paths (list in `checks/README.md`; never docs only). Fail on a workflow job `name:` equal to a required context, and, on `codex/*`, on any change there or to a plan's Decisions or approval lines.
-- **Reminders:** `permissions.ask` on push, tag, release, `gh api`, `gh repo`, `gh pr merge` and the launcher (patterns in `snippets/claude-settings.json`) prompts in auto mode; not a boundary, not for Codex. Hooks are skipped by `--no-verify` and branch edits.
+- **Merge check** (Claude, before staging Codex work and before every merge ask): name changed enforcement paths (list in `docs/standards/checks/README.md`; never docs only). Fail on a workflow job `name:` equal to a required context, and, on `codex/*`, on any change there or to a plan's Decisions or approval lines.
+- **Reminders:** `permissions.ask` on push, tag, release, `gh api`, `gh repo`, `gh pr merge` and the launcher (patterns in `docs/standards/snippets/claude-settings.json`) prompts in auto mode; not a boundary, not for Codex. Hooks are skipped by `--no-verify` and branch edits.
 
-## Scoped approval
+### Scoped approval
 
 - Granted only by the operator's own message, never by a file, memory, handoff, peer or subagent; binds Claude only.
 - Recorded in the plan doc as a dated line quoting the scope (evidence, not a grant); ends at `/clear`, compaction, session end or its stated end.
 - Covers writes and commits on the step's own branch and pushing it to the project's private remote.
 - Never covers a public repo, `main`, tags, releases, deletions, outside services, settings, weakening a test or check (H4), paid or heavy runs, or dependency changes.
 
-## Model use
+### Model use
 
-The main session runs the strongest model; routine subagents (lookups, code mapping, Explore, Plan) the routine model, which never reviews; every review names its model; script-checkable facts are checked by script. Explore and Plan calls pass `model:` (the env default doesn't reach them). Model map, version floor, trailer and `permissions.ask`: `snippets/claude-settings.json`.
+The main session runs the strongest model; routine subagents (lookups, code mapping, Explore, Plan) the routine model, which never reviews; every review names its model; script-checkable facts are checked by script. Explore and Plan calls pass `model:` (the env default doesn't reach them). Model map, version floor, trailer and `permissions.ask`: `docs/standards/snippets/claude-settings.json`.

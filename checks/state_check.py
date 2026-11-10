@@ -25,6 +25,7 @@ def main_checkout(start: Path) -> Path | None:
         ["git", "-C", str(start), "rev-parse", "--path-format=absolute", "--git-common-dir"],
         capture_output=True,
         text=True,
+        check=False,
     )
     if r.returncode != 0:
         return None
@@ -37,7 +38,7 @@ def sections(lines: list[str]) -> dict[str, tuple[int, int, int]]:
     current: str | None = None
     start = 0
     count = 0
-    for i, ln in enumerate(lines + ["## <end>"]):
+    for i, ln in enumerate([*lines, "## <end>"]):
         if ln.startswith("## ") or i == len(lines):
             if current is not None:
                 found[current] = (start, i - 1, count)
@@ -47,7 +48,9 @@ def sections(lines: list[str]) -> dict[str, tuple[int, int, int]]:
     return found
 
 
-def warnings_for(text: str, only_lines: set[int] | None = None, size_matters: bool = True) -> list[str]:
+def warnings_for(
+    text: str, only_lines: set[int] | None = None, size_matters: bool = True
+) -> list[str]:
     """Size warnings; with only_lines, only those touching these 1-based line numbers."""
     out: list[str] = []
     size = len(text.encode())
@@ -99,8 +102,12 @@ def from_hook(payload: dict[str, object]) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Warn when CLAUDE-STATE.md passes its size limits (never fails).")
-    ap.add_argument("file", nargs="?", help=f"state file (default: {STATE_NAME} in the main checkout)")
+    ap = argparse.ArgumentParser(
+        description="Warn when CLAUDE-STATE.md passes its size limits (never fails)."
+    )
+    ap.add_argument(
+        "file", nargs="?", help=f"state file (default: {STATE_NAME} in the main checkout)"
+    )
     ap.add_argument(
         "--hook",
         choices=("post-tool-use", "session-start"),

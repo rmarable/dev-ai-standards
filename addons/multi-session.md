@@ -6,7 +6,8 @@ Several agent sessions sharing one computer (memory, CPU, disk).
 
 - Before heavy shared work (full suite, simulations, model checks over ~1 GB or all cores, evals,
   builds), ask the active sessions what will run and its load, and wait for their OK. Standing
-  budgets agreed between sessions still apply without asking.
+  budgets agreed between sessions still apply without asking. Codex: ask the operator instead
+  (Codex add-on).
 - Read `docs/standards/addons/multi-session.md` at session start when other sessions are active.
 
 ## Claude only (`CLAUDE.md`)

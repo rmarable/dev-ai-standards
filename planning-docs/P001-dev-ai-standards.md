@@ -454,8 +454,8 @@ merges and its gate throughout (decision 1).
 - Codex: one real loop (Codex edits and `HANDOFF.md`, no git writes; the hook lists the
   uncommitted worktree; `HANDOFF.md` untracked; Claude checks the git dir, commits hooks-off with
   one Codex trailer, pushes with main's hooks; PR merged). A fresh Codex session answers what it
-  may not do, where its handoff goes and its review rule. A core-only repo has no high-stakes or
-  Codex text.
+  may not do, where its handoff goes and its review rule. A core-only repo has no high-stakes
+  text and no Codex add-on block or Codex project lines (K2-8, 2026-11-10).
 - Launcher: Claude runs `--dry-run` (changes nothing) and `--local` (a repo where `drift` reports
   nothing); the remote steps refuse when Claude runs them; a real run by the operator in a terminal
   makes a private repo with the ruleset and green rules-check, and opens Claude.

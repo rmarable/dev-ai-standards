@@ -1,16 +1,16 @@
 # State-file add-on
 
 Claude's local working state: `CLAUDE-STATE.md`, git-ignored, loaded through a git-ignored
-`CLAUDE.local.md` holding the single line `@CLAUDE-STATE.md`. Codex never reads it.
+`CLAUDE.local.md` holding the single line `@CLAUDE-STATE.md`. Codex never reads it. `apply` writes
+the "Path rule" section below to `.claude/rules/state-file.md` as kit text: it is in the manifest,
+so an edit in the project is a finding and kit upgrades replace it.
 
-## Always loaded (`AGENTS.md` block `state-file`)
-
-These lines bind Claude; Codex never reads or edits the state file.
+## Claude only (`CLAUDE.md`)
 
 - Update `CLAUDE-STATE.md` as work progresses: on starting or finishing a task, on each step that
   changes the next action, and before `/clear` or a task boundary.
-- These updates need no confirmation; name each one in the reply. The permission comes from this
-  standard, never from a file or memory.
+- Updates to the local, gitignored state file are exempt from the confirm rule (this standard
+  grants it; no file can); name each update in the reply.
 - Shape and limits load from `.claude/rules/state-file.md` when the file is read or edited.
 
 ## Path rule (`.claude/rules/state-file.md`, `paths: CLAUDE-STATE.md`)
@@ -38,7 +38,8 @@ These lines bind Claude; Codex never reads or edits the state file.
 
 ## `state_check`
 
-Warn-only size check (file, line, section caps). PostToolUse on Edit or Write of the file reports
-only that edit; SessionStart reports the whole file. It finds the main checkout with
+Warn-only size check (file, line, section caps). `apply` merges both hooks into
+`.claude/settings.json`: PostToolUse on Edit or Write of the file reports only that edit;
+SessionStart reports the whole file. The pre-commit hook also runs it, as a warning. It finds the main checkout with
 `git rev-parse --git-common-dir`. A PostToolUse warning reaches Claude after the edit has happened;
-it can't block it. Mechanics: `checks/README.md`.
+it can't block it. Mechanics: `docs/standards/checks/README.md`.

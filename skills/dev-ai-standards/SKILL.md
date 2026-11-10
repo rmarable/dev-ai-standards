@@ -41,8 +41,9 @@ kit version you used (`cat "$kit/VERSION"`) and its commit (`git -C "$kit" rev-p
 5. Show `git status` and `git diff`. Fill the project-owned placeholders (`<...>` in `AGENTS.md`
    "Project") with the operator. Run `drift` again: it must report nothing.
 6. One changelog line; commit and merge as the project merges (core). For an update, the PR holds
-   only kit files, the manifest and the `Standards:` line (a newer version), or `rules_check`
-   refuses it; the changelog line and apply's other writes go in a separate PR
+   only `docs/standards/**` and the kit blocks and `Standards:` line (a newer version) of
+   `AGENTS.md` and `CLAUDE.md`, or `rules_check` refuses it; the changelog line and apply's other
+   writes go in a separate PR
    (`docs/standards/checks/README.md`, "Kit upgrades"). Tell the operator to start fresh Claude and
    Codex sessions so the new rules load.
 

@@ -12,13 +12,16 @@ import datetime
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
+# The GitHub owner for new repos; teammates set NEW_CLAUDE_PROJECT_OWNER to their login (README).
 OWNER = os.environ.get("NEW_CLAUDE_PROJECT_OWNER", "rmarable")
 SRC_ROOT = Path(os.environ.get("NEW_CLAUDE_PROJECT_ROOT", str(Path.home() / "src")))
-# The operator's GitHub plan (2026-11-10: Free). On Free, private repos get no ruleset.
+# The operator's GitHub plan (2026-11-10: Free). On Free, private repos get no ruleset. Teammates on
+# Pro or Team set NEW_CLAUDE_PROJECT_GH_PLAN (README, "Environment").
 GH_PLAN = os.environ.get("NEW_CLAUDE_PROJECT_GH_PLAN", "free").lower()
 
 SUBJECT = "new-claude-project: initial commit"
@@ -60,8 +63,12 @@ class Run:
             print("Nothing was created.", file=sys.stderr)
 
 
-def sh(cmd: list[str], cwd: Path | None = None, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, cwd=cwd, input=input_text, text=True, capture_output=True)
+def sh(
+    cmd: list[str], cwd: Path | None = None, input_text: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        cmd, cwd=cwd, input=input_text, text=True, capture_output=True, check=False
+    )
 
 
 def first_line(text: str) -> str:
@@ -72,7 +79,11 @@ def first_line(text: str) -> str:
 
 
 def run_by_claude() -> bool:
-    """True when no human can answer: no TTY on stdin or stdout, or CLAUDECODE is set."""
+    """True when no human can answer: no TTY on stdin or stdout, or CLAUDECODE is set.
+
+    A reminder, not a boundary: `env -u CLAUDECODE script -q /dev/null new-claude-project ...` with
+    piped answers passes it. The `permissions.ask` patterns for the launcher are the other guard.
+    """
     if os.environ.get("CLAUDECODE"):
         return True
     return not (sys.stdin.isatty() and sys.stdout.isatty())
@@ -99,16 +110,34 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     p.add_argument("name", help="project name: lowercase letters, digits, '.', '_', '-'")
     p.add_argument("--high-stakes", action="store_true", help="add the high-stakes add-on (tier)")
-    p.add_argument("--stack", choices=["python", "iac", "other"], help="stack add-on (default other)")
-    p.add_argument("--codex", action="store_true", help="add the Codex add-on; prints the first Codex worktree command")
-    p.add_argument("--public", action="store_true", help="public repo: secret scan first, then type the name back")
+    p.add_argument(
+        "--stack", choices=["python", "iac", "other"], help="stack add-on (default other)"
+    )
+    p.add_argument(
+        "--codex",
+        action="store_true",
+        help="add the Codex add-on; prints the first Codex worktree command",
+    )
+    p.add_argument(
+        "--public",
+        action="store_true",
+        help="public repo: secret scan first, then type the name back",
+    )
     p.add_argument("--local", action="store_true", help="no GitHub: build and commit locally only")
-    p.add_argument("--no-pr", action="store_true", help="solo throwaway: local merges, ruleset blocks force push and deletion only")
-    p.add_argument("--no-launch", action="store_true", help="print next steps instead of opening Claude")
+    p.add_argument(
+        "--no-pr",
+        action="store_true",
+        help="solo throwaway: local merges, ruleset blocks force push and deletion only",
+    )
+    p.add_argument(
+        "--no-launch", action="store_true", help="print next steps instead of opening Claude"
+    )
     p.add_argument("--dry-run", action="store_true", help="print what would happen; change nothing")
     args = p.parse_args(argv)
     if not NAME_RE.match(args.name) or args.name in {".", ".."} or args.name.endswith(".git"):
-        p.error(f"bad name {args.name!r}: use lowercase letters, digits, '.', '_', '-' (at most 100)")
+        p.error(
+            f"bad name {args.name!r}: use lowercase letters, digits, '.', '_', '-' (at most 100)"
+        )
     if args.public and args.local:
         p.error("--public and --local conflict: --local makes no GitHub repo")
     return args
@@ -122,7 +151,9 @@ def kit_paths() -> tuple[Path, Path]:
     return kit, apply_bin
 
 
-def preflight(args: argparse.Namespace, target: Path, kit: Path, apply_bin: Path) -> None:
+def preflight(  # noqa: PLR0912 (one linear command flow)
+    args: argparse.Namespace, target: Path, kit: Path, apply_bin: Path, by_claude: bool = False
+) -> None:
     if not (apply_bin.is_file() and os.access(apply_bin, os.X_OK)):
         raise Stop(f"{apply_bin} is missing or not executable")
     for key in ("user.name", "user.email"):
@@ -132,20 +163,35 @@ def preflight(args: argparse.Namespace, target: Path, kit: Path, apply_bin: Path
         raise Stop(f"{target} already exists")
 
     inside = sh(["git", "-C", str(kit), "rev-parse", "--is-inside-work-tree"]).returncode == 0
-    upstream = inside and sh(["git", "-C", str(kit), "rev-parse", "--abbrev-ref", "@{u}"]).returncode == 0
+    upstream = (
+        inside and sh(["git", "-C", str(kit), "rev-parse", "--abbrev-ref", "@{u}"]).returncode == 0
+    )
     if upstream:
         if args.dry_run:
-            print(f"Would update the kit: git -C {kit} pull --ff-only")
+            print(f"Would update the kit: git -C {shlex.quote(str(kit))} pull --ff-only")
+        elif args.local or by_claude:
+            # No network write to the operator's PATH tool without a human (K1-9).
+            print(
+                f"Kit not updated (--local or no human): run git -C {shlex.quote(str(kit))} pull"
+                " --ff-only yourself"
+            )
         else:
             pull = sh(["git", "-C", str(kit), "pull", "--ff-only"])
             if pull.returncode != 0:
                 raise Stop(f"kit update failed (git pull --ff-only): {first_line(pull.stderr)}")
     elif not args.local:
-        raise Stop(f"the kit at {kit} has no upstream, so it can't be checked up to date (use --local)")
+        raise Stop(
+            f"the kit at {kit} has no upstream, so it can't be checked up to date (use --local)"
+        )
     version_file = kit / "VERSION"
     version = version_file.read_text().strip() if version_file.is_file() else "unknown"
-    commit = sh(["git", "-C", str(kit), "rev-parse", "--short", "HEAD"]).stdout.strip() if inside else ""
-    print(f"Kit: dev-ai-standards v{version} at {kit} (commit {commit or 'unknown: not a git checkout'})")
+    commit = (
+        sh(["git", "-C", str(kit), "rev-parse", "--short", "HEAD"]).stdout.strip() if inside else ""
+    )
+    print(
+        f"Kit: dev-ai-standards v{version} at {kit} (commit"
+        f" {commit or 'unknown: not a git checkout'})"
+    )
     if not upstream:
         print("Kit update skipped (no upstream; --local).")
 
@@ -164,22 +210,25 @@ def preflight(args: argparse.Namespace, target: Path, kit: Path, apply_bin: Path
 
 def choose(args: argparse.Namespace, interactive: bool) -> None:
     """Ask for each choice the flags didn't give; without a human, use the defaults."""
-    if not args.high_stakes:
-        if interactive:
-            tier = ask("Tier [core/high-stakes] (core): ", "core").lower()
-            if tier not in {"core", "high-stakes"}:
-                raise Stop(f"unknown tier {tier!r}")
-            args.high_stakes = tier == "high-stakes"
+    if not args.high_stakes and interactive:
+        tier = ask("Tier [core/high-stakes] (core): ", "core").lower()
+        if tier not in {"core", "high-stakes"}:
+            raise Stop(f"unknown tier {tier!r}")
+        args.high_stakes = tier == "high-stakes"
     if args.stack is None:
-        stack = ask("Stack [python/iac/other] (other): ", "other").lower() if interactive else "other"
+        stack = (
+            ask("Stack [python/iac/other] (other): ", "other").lower() if interactive else "other"
+        )
         if stack not in {"python", "iac", "other"}:
             raise Stop(f"unknown stack {stack!r}")
         args.stack = stack
     if not args.codex and interactive:
         args.codex = ask("Codex add-on [y/N]: ", "n").lower() in {"y", "yes"}
     tier = "high-stakes" if args.high_stakes else "core"
-    print(f"Choices: tier {tier}, stack {args.stack}, Codex {'yes' if args.codex else 'no'}"
-          f"{', no-pr' if args.no_pr else ''}.")
+    print(
+        f"Choices: tier {tier}, stack {args.stack}, Codex {'yes' if args.codex else 'no'}"
+        f"{', no-pr' if args.no_pr else ''}."
+    )
 
 
 def apply_cmd(args: argparse.Namespace, apply_bin: Path, target: Path) -> list[str]:
@@ -191,7 +240,7 @@ def apply_cmd(args: argparse.Namespace, apply_bin: Path, target: Path) -> list[s
         cmd.append("--codex")
     if args.no_pr:
         cmd.append("--no-pr")
-    return cmd + [str(target)]
+    return [*cmd, str(target)]
 
 
 def milestone_path(name: str) -> str:
@@ -274,8 +323,10 @@ def ruleset_wanted(args: argparse.Namespace) -> tuple[bool, str]:
     if args.public:
         return True, "public repo"
     if GH_PLAN == "free":
-        return False, ("GitHub Free: private repos can't take a ruleset (believed, not verified; "
-                       "A4 tries it once). Protection is CI plus the reminders.")
+        return False, (
+            "GitHub Free: private repos can't take a ruleset (believed, not verified; "
+            "A4 tries it once). Protection is CI plus the reminders."
+        )
     return True, f"GitHub plan {GH_PLAN}"
 
 
@@ -287,33 +338,51 @@ def rulesets(args: argparse.Namespace) -> list[dict[str, object]]:
         if args.high_stakes:
             contexts.append({"context": GATE_CONTEXT})
         main_rules += [
-            {"type": "pull_request", "parameters": {
-                "required_approving_review_count": 0,
-                "dismiss_stale_reviews_on_push": False,
-                "require_code_owner_review": False,
-                "require_last_push_approval": False,
-                "required_review_thread_resolution": False,
-                "allowed_merge_methods": ["merge"],
-            }},
-            {"type": "required_status_checks", "parameters": {
-                "strict_required_status_checks_policy": bool(args.high_stakes),
-                "required_status_checks": contexts,
-            }},
+            {
+                "type": "pull_request",
+                "parameters": {
+                    "required_approving_review_count": 0,
+                    "dismiss_stale_reviews_on_push": False,
+                    "require_code_owner_review": False,
+                    "require_last_push_approval": False,
+                    "required_review_thread_resolution": False,
+                    "allowed_merge_methods": ["merge"],
+                },
+            },
+            {
+                "type": "required_status_checks",
+                "parameters": {
+                    "strict_required_status_checks_policy": bool(args.high_stakes),
+                    "required_status_checks": contexts,
+                },
+            },
         ]
     return [
-        {"name": "main", "target": "branch", "enforcement": "active", "bypass_actors": [],
-         "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
-         "rules": main_rules},
-        {"name": "release tags", "target": "tag", "enforcement": "active", "bypass_actors": [],
-         "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
-         "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}]},
+        {
+            "name": "main",
+            "target": "branch",
+            "enforcement": "active",
+            "bypass_actors": [],
+            "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
+            "rules": main_rules,
+        },
+        {
+            "name": "release tags",
+            "target": "tag",
+            "enforcement": "active",
+            "bypass_actors": [],
+            "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
+            "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
+        },
     ]
 
 
 def remote_actions(args: argparse.Namespace) -> list[str]:
     vis = "--public" if args.public else "--private"
-    acts = [f"git commit (subject '{SUBJECT}')",
-            f"gh repo create {OWNER}/{args.name} {vis} --source . --push"]
+    acts = [
+        f"git commit (subject '{SUBJECT}')",
+        f"gh repo create {OWNER}/{args.name} {vis} --source . --push",
+    ]
     wanted, why = ruleset_wanted(args)
     kind = "force push and deletion only (--no-pr)" if args.no_pr else "default PR ruleset"
     acts.append(f"ruleset on main and v* tags: {kind}" if wanted else f"no ruleset: {why}")
@@ -335,8 +404,10 @@ def go_remote(args: argparse.Namespace, target: Path, run: Run) -> None:
         print(f"Ruleset skipped: {why}")
         return
     for body in rulesets(args):
-        made = sh(["gh", "api", "--method", "POST", f"repos/{repo}/rulesets", "--input", "-"],
-                  input_text=json.dumps(body))
+        made = sh(
+            ["gh", "api", "--method", "POST", f"repos/{repo}/rulesets", "--input", "-"],
+            input_text=json.dumps(body),
+        )
         if made.returncode != 0:
             raise Stop(f"ruleset '{body['name']}' failed: {first_line(made.stderr)}")
         run.note(f"ruleset '{body['name']}' on {repo}")
@@ -344,20 +415,30 @@ def go_remote(args: argparse.Namespace, target: Path, run: Run) -> None:
 
 
 def first_prompt(name: str) -> str:
-    return (f"Read AGENTS.md, then plan milestone M1 with me in {milestone_path(name)}. "
-            "Confirm before writing files, committing or pushing.")
+    return (
+        f"Read AGENTS.md, then plan milestone M1 with me in {milestone_path(name)}. "
+        "Confirm before writing files, committing or pushing."
+    )
 
 
 def codex_hint(args: argparse.Namespace, target: Path) -> None:
     base = "main" if args.local else "origin/main"
+    print(
+        "Codex: run the claude-codex-integration skill (step 3) for the SessionStart hook that"
+        " lists"
+    )
+    print("Codex handoffs; apply doesn't install it.")
     print("First Codex worktree (run it yourself; Codex is not started):")
-    print(f"  git -C {target} worktree add -b codex/<topic> ../{args.name}-codex-<topic> {base}")
+    print(
+        f"  git -C {shlex.quote(str(target))} worktree add -b codex/<topic>"
+        f" ../{args.name}-codex-<topic> {base}"
+    )
 
 
 def next_steps(args: argparse.Namespace, target: Path) -> None:
     print("Next steps:")
-    print(f"  cd {target}")
-    print(f"  claude {json.dumps(first_prompt(args.name))}")
+    print(f"  cd {shlex.quote(str(target))}")
+    print(f"  claude {shlex.quote(first_prompt(args.name))}")
 
 
 def dry_run(args: argparse.Namespace, target: Path, apply_bin: Path) -> None:
@@ -381,19 +462,21 @@ def dry_run(args: argparse.Namespace, target: Path, apply_bin: Path) -> None:
         print(f"Would open Claude in {target} with: {first_prompt(args.name)}")
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str]) -> int:  # noqa: PLR0912, PLR0915 (one linear command flow)
     args = parse_args(argv)
     by_claude = run_by_claude()
     if by_claude and not (args.dry_run or args.local):
-        print("new-claude-project: refused: the remote steps (repo create, push, ruleset) need an "
-              "interactive human (TTYs and CLAUDECODE unset); Claude may run --dry-run or --local.",
-              file=sys.stderr)
+        print(
+            "new-claude-project: refused: the remote steps (repo create, push, ruleset) need an "
+            "interactive human (TTYs and CLAUDECODE unset); Claude may run --dry-run or --local.",
+            file=sys.stderr,
+        )
         return 2
     target = SRC_ROOT / args.name
     kit, apply_bin = kit_paths()
     run = Run()
     try:
-        preflight(args, target, kit, apply_bin)
+        preflight(args, target, kit, apply_bin, by_claude)
         choose(args, interactive=not by_claude)
         if args.dry_run:
             dry_run(args, target, apply_bin)
@@ -416,7 +499,10 @@ def main(argv: list[str]) -> int:
             print("Remote actions:")
             for act in remote_actions(args):
                 print(f"  - {act}")
-            if args.public and ask(f"Public repo: type the name ({args.name}) to confirm: ", "") != args.name:
+            if (
+                args.public
+                and ask(f"Public repo: type the name ({args.name}) to confirm: ", "") != args.name
+            ):
                 raise Stop("name not typed back; nothing published")
             if ask("Go ahead with these actions? [y/N]: ", "n").lower() not in {"y", "yes"}:
                 raise Stop("not confirmed; no commit and no remote actions")
@@ -431,7 +517,7 @@ def main(argv: list[str]) -> int:
             return 0
         try:
             os.chdir(target)
-            os.execvp("claude", ["claude", first_prompt(args.name)])
+            os.execvp("claude", ["claude", first_prompt(args.name)])  # noqa: S606 (opens Claude by design)
         except OSError as e:
             raise Stop(f"can't open claude: {e.strerror}") from None
     except Stop as e:

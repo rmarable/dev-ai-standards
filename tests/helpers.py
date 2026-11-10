@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -36,7 +37,9 @@ def env(home: Path) -> dict[str, str]:
 def make_kit(base: Path) -> Path:
     """A copy of this kit (without tests and drafting notes) in a temp dir."""
     kit = base / "kit"
-    shutil.copytree(OUT, kit, ignore=shutil.ignore_patterns("tests", "_notes", "__pycache__", ".git"))
+    shutil.copytree(
+        OUT, kit, ignore=shutil.ignore_patterns("tests", "_notes", "__pycache__", ".git")
+    )
     return kit
 
 
@@ -44,11 +47,17 @@ def apply(kit: Path, target: Path, home: Path, *flags: str) -> subprocess.Comple
     return py(kit / "bin" / "dev-ai-standards", "apply", *flags, str(target), cwd=home, home=home)
 
 
-def run(cmd: list[str], cwd: Path, home: Path, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, cwd=cwd, env=env(home), capture_output=True, text=True, input=stdin)
+def run(
+    cmd: list[str], cwd: Path, home: Path, stdin: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        cmd, cwd=cwd, env=env(home), capture_output=True, text=True, input=stdin, check=False
+    )
 
 
-def py(script: Path, *args: str, cwd: Path, home: Path, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+def py(
+    script: Path, *args: str, cwd: Path, home: Path, stdin: str | None = None
+) -> subprocess.CompletedProcess[str]:
     return run([sys.executable, str(script), *args], cwd, home, stdin)
 
 
@@ -65,13 +74,20 @@ def init_repo(path: Path, home: Path) -> Path:
     return path
 
 
-def commit(repo: Path, home: Path, message: str, files: dict[str, str] | None = None, allow_empty: bool = False) -> str:
+def commit(
+    repo: Path,
+    home: Path,
+    message: str,
+    files: dict[str, str] | None = None,
+    allow_empty: bool = False,
+) -> str:
     for rel, text in (files or {}).items():
         p = repo / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text)
     git(repo, home, "add", "-A")
-    args = ["commit", "-q", "-m", message]
+    # --no-verify: fixtures build bad states on purpose; the hooks have their own tests.
+    args = ["commit", "-q", "--no-verify", "-m", message]
     if allow_empty:
         args.append("--allow-empty")
     git(repo, home, *args)
@@ -80,3 +96,62 @@ def commit(repo: Path, home: Path, message: str, files: dict[str, str] | None = 
 
 def msg(subject: str, trailer: str | None = CLAUDE_TRAILER) -> str:
     return subject + ("\n\n" + trailer if trailer else "")
+
+
+# A fake `gh` for gate-status: `pr view` names base branch main; statuses and check runs are canned.
+FAKE_GH = """#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_LOG_DIR"] + "/gh.log", "a") as f:
+    f.write(" ".join(args) + "\\n")
+if args[:2] == ["pr", "view"]:
+    print(json.dumps({"baseRefName": "main", "headRefOid": os.environ.get("FAKE_HEAD", "")}))
+elif args[:1] == ["api"] and "/statuses" in args[1]:
+    print(json.dumps([{"context": "local-gate", "state": "success", "creator": {"login": "op"}}]))
+elif args[:1] == ["api"] and "/check-runs" in args[1]:
+    n = int(os.environ.get("FAKE_RUNS", "0"))
+    print(json.dumps({"total_count": n, "check_runs": [{"name": "local-gate"}] * n}))
+else:
+    print("{}")
+"""
+
+
+def write_exe(path: Path, text: str) -> None:
+    path.write_text(text)
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+class GateStatusRunner:
+    """Runs gate-status offline: fake `gh` on PATH, a local bare `origin` (so its fetch works)."""
+
+    def __init__(self, tmp: Path, home: Path, repo: Path) -> None:
+        self.home, self.repo = home, repo
+        self.script = repo / "docs/standards/bin/gate-status"
+        self.fakebin = tmp / "fakebin"
+        self.fakebin.mkdir()
+        write_exe(self.fakebin / "gh", FAKE_GH)
+        self.logs = tmp / "logs"
+        self.logs.mkdir()
+        origin = tmp / "origin.git"
+        git(tmp, home, "init", "-q", "--bare", "-b", "main", str(origin))
+        git(repo, home, "remote", "add", "origin", str(origin))
+        git(repo, home, "push", "-q", "origin", "main")
+
+    def run(
+        self, *args: str, script: Path | None = None, extra: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        e = env(self.home)
+        e["PATH"] = f"{self.fakebin}{os.pathsep}{e.get('PATH', '')}"
+        e["FAKE_LOG_DIR"] = str(self.logs)
+        e.update(extra or {})
+        return subprocess.run(
+            [sys.executable, str(script or self.script), *args],
+            cwd=self.repo,
+            env=e,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def offline(self, *args: str, **kw: object) -> subprocess.CompletedProcess[str]:
+        return self.run("--base", "origin/main", "--repo", "o/r", *args, **kw)  # type: ignore[arg-type]

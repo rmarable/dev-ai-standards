@@ -31,7 +31,10 @@ case "$1 $2" in
     echo "GraphQL: Could not resolve to a Repository with the name '$3'. (repository)" >&2
     exit 1 ;;
   "repo create") exit 0 ;;
-  "api "*) cat >> "$FAKE_LOG_DIR/gh-api-input.log"; echo >> "$FAKE_LOG_DIR/gh-api-input.log"; exit 0 ;;
+  "api "*)
+    cat >> "$FAKE_LOG_DIR/gh-api-input.log"
+    echo >> "$FAKE_LOG_DIR/gh-api-input.log"
+    exit 0 ;;
 esac
 exit 0
 """
@@ -46,7 +49,8 @@ echo "$*" >> "$FAKE_LOG_DIR/apply.log"
 [ "$1" = apply ] || exit 2
 for last; do :; done
 mkdir -p "$last/docs/standards"
-printf '# AGENTS.md\\n\\nStandards: dev-ai-standards v0.1.0 (core; stack other)\\n' > "$last/AGENTS.md"
+std='Standards: dev-ai-standards v0.1.0 (core; stack other)'
+printf '# AGENTS.md\\n\\n%s\\n' "$std" > "$last/AGENTS.md"
 printf '@AGENTS.md\\n' > "$last/CLAUDE.md"
 printf 'fake\\n' > "$last/docs/standards/manifest"
 """
@@ -63,7 +67,9 @@ class LauncherTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         # A copy of the kit with no .git, so the launcher never pulls the real kit.
         self.kit = self.tmp / "kit"
-        shutil.copytree(KIT, self.kit, ignore=shutil.ignore_patterns(".git", "_notes", "__pycache__"))
+        shutil.copytree(
+            KIT, self.kit, ignore=shutil.ignore_patterns(".git", "_notes", "__pycache__")
+        )
         if not (self.kit / "VERSION").exists():
             (self.kit / "VERSION").write_text("0.1.0\n")
         self.script = self.kit / "bin" / "new-claude-project"
@@ -78,44 +84,75 @@ class LauncherTest(unittest.TestCase):
         home = self.tmp / "home"
         home.mkdir()
         gitconfig = self.tmp / "gitconfig"
-        gitconfig.write_text("[user]\n\tname = Test User\n\temail = test@example.invalid\n"
-                             "[init]\n\tdefaultBranch = main\n")
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "NEW_CLAUDE_PROJECT_"))}
+        gitconfig.write_text(
+            "[user]\n\tname = Test User\n\temail = test@example.invalid\n"
+            "[init]\n\tdefaultBranch = main\n"
+        )
+        env = {
+            k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "NEW_CLAUDE_PROJECT_"))
+        }
         env.pop("CLAUDECODE", None)
         env.pop("DEV_AI_STANDARDS_BIN", None)
-        env.update({
-            "PATH": f"{fakebin}{os.pathsep}{env.get('PATH', '')}",
-            "HOME": str(home),
-            "GIT_CONFIG_GLOBAL": str(gitconfig),
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "NEW_CLAUDE_PROJECT_ROOT": str(self.src),
-            "FAKE_LOG_DIR": str(self.logs),
-        })
+        env.update(
+            {
+                "PATH": f"{fakebin}{os.pathsep}{env.get('PATH', '')}",
+                "HOME": str(home),
+                "GIT_CONFIG_GLOBAL": str(gitconfig),
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "NEW_CLAUDE_PROJECT_ROOT": str(self.src),
+                "FAKE_LOG_DIR": str(self.logs),
+            }
+        )
         if USE_FAKE_APPLY:
             fake_apply = self.tmp / "fake-dev-ai-standards"
             write_exe(fake_apply, FAKE_APPLY)
             env["DEV_AI_STANDARDS_BIN"] = str(fake_apply)
+        else:
+            # The real apply, behind a wrapper that logs each call, so the "apply never ran"
+            # checks below can fail with the real apply too (K1-13).
+            wrapper = self.tmp / "logged-dev-ai-standards"
+            write_exe(
+                wrapper,
+                '#!/bin/sh\necho "$*" >> "$FAKE_LOG_DIR/apply.log"\n'
+                f'exec {sys.executable} {self.kit / "bin" / "dev-ai-standards"} "$@"\n',
+            )
+            env["DEV_AI_STANDARDS_BIN"] = str(wrapper)
         self.env = env
-        # The kit copy tracks a local bare "upstream" so the preflight's pull runs without a network.
+        # The kit copy tracks a local bare "upstream", so the preflight's pull needs no network.
         upstream = self.tmp / "kit-upstream.git"
-        for cmd in (["git", "init", "-q", "-b", "main"], ["git", "add", "-A"],
-                    ["git", "commit", "-q", "-m", "kit"],
-                    ["git", "init", "-q", "--bare", str(upstream)],
-                    ["git", "remote", "add", "origin", str(upstream)],
-                    ["git", "push", "-q", "-u", "origin", "main"]):
+        for cmd in (
+            ["git", "init", "-q", "-b", "main"],
+            ["git", "add", "-A"],
+            ["git", "commit", "-q", "-m", "kit"],
+            ["git", "init", "-q", "--bare", str(upstream)],
+            ["git", "remote", "add", "origin", str(upstream)],
+            ["git", "push", "-q", "-u", "origin", "main"],
+        ):
             subprocess.run(cmd, cwd=self.kit, env=env, check=True, capture_output=True)
 
     def run_script(self, *args: str, **extra_env: str) -> subprocess.CompletedProcess[str]:
         env = dict(self.env, **extra_env)
-        return subprocess.run([sys.executable, str(self.script), *args], env=env, text=True,
-                              capture_output=True, stdin=subprocess.DEVNULL, timeout=120)
+        return subprocess.run(
+            [sys.executable, str(self.script), *args],
+            env=env,
+            text=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=120,
+            check=False,
+        )
 
     def run_in_pty(self, args: list[str], answers: str, **extra_env: str) -> tuple[int, str]:
         """Run with stdin and stdout on a terminal, as a human would; answers are typed up front."""
         master, slave = pty.openpty()
         env = dict(self.env, **extra_env)
-        proc = subprocess.Popen([sys.executable, str(self.script), *args], env=env,
-                                stdin=slave, stdout=slave, stderr=slave)
+        proc = subprocess.Popen(
+            [sys.executable, str(self.script), *args],
+            env=env,
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+        )
         os.close(slave)
         out: list[bytes] = []
 
@@ -160,24 +197,48 @@ class LauncherTest(unittest.TestCase):
         target = self.src / "demo"
         self.assertTrue((target / "AGENTS.md").is_file())
         self.assertTrue((target / "planning-docs/milestones/M1-demo.md").is_file())
-        msg = subprocess.run(["git", "log", "-1", "--format=%B"], cwd=target, env=self.env,
-                             text=True, capture_output=True).stdout.strip()
-        self.assertEqual(msg, "new-claude-project: initial commit\n\n"
-                              "Co-Authored-By: Claude <noreply@anthropic.com>")
-        parents = subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=target, env=self.env,
-                                 text=True, capture_output=True).stdout.strip()
+        msg = subprocess.run(
+            ["git", "log", "-1", "--format=%B"],
+            cwd=target,
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        ).stdout.strip()
+        self.assertEqual(
+            msg,
+            "new-claude-project: initial commit\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        )
+        parents = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=target,
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        ).stdout.strip()
         self.assertEqual(parents, "1")
-        status = subprocess.run(["git", "status", "--porcelain"], cwd=target, env=self.env,
-                                text=True, capture_output=True).stdout
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=target,
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        ).stdout
         self.assertEqual(status, "")
         self.assertEqual(self.log("gh.log"), "")
         self.assertEqual(self.log("claude.log"), "")  # no TTY: next steps printed instead
         self.assertIn("worktree add -b codex/<topic>", res.stdout)
-        if USE_FAKE_APPLY:
-            self.assertIn("apply --stack other --codex", self.log("apply.log"))
-        else:
-            drift = subprocess.run([str(REAL_APPLY), "drift", str(target)], env=self.env,
-                                   text=True, capture_output=True)
+        self.assertIn("apply --stack other --codex", self.log("apply.log"))
+        if not USE_FAKE_APPLY:
+            drift = subprocess.run(
+                [str(REAL_APPLY), "drift", str(target)],
+                env=self.env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
             self.assertEqual(drift.returncode, 0, drift.stdout + drift.stderr)
 
     def test_remote_refused_when_claudecode_set(self) -> None:
@@ -248,8 +309,9 @@ class LauncherTest(unittest.TestCase):
         leaky = self.tmp / "leaky-apply"
         key = "AKIA" + "ABCDEFGHIJKLMNOP"
         write_exe(leaky, f'#!/bin/sh\nfor last; do :; done\necho "key={key}" > "$last/notes.txt"\n')
-        code, out = self.run_in_pty(["demo", "--public"], "\n\nn\ndemo\ny\n",
-                                    DEV_AI_STANDARDS_BIN=str(leaky))
+        code, out = self.run_in_pty(
+            ["demo", "--public"], "\n\nn\ndemo\ny\n", DEV_AI_STANDARDS_BIN=str(leaky)
+        )
         self.assertEqual(code, 1, out)
         self.assertIn("notes.txt:1 (AWS access key id)", out)
         self.assertNotIn(key, out)

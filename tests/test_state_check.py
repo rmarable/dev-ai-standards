@@ -38,7 +38,14 @@ class StateCheck(unittest.TestCase):
         return py(SCRIPT, str(self.file), cwd=self.tmp, home=self.home)
 
     def hook(self, payload: dict[str, object]):
-        return py(SCRIPT, "--hook", "post-tool-use", cwd=self.tmp, home=self.home, stdin=json.dumps(payload))
+        return py(
+            SCRIPT,
+            "--hook",
+            "post-tool-use",
+            cwd=self.tmp,
+            home=self.home,
+            stdin=json.dumps(payload),
+        )
 
     def test_within_limits_is_silent(self) -> None:
         self.file.write_text(state())
@@ -55,12 +62,25 @@ class StateCheck(unittest.TestCase):
 
     def test_hook_reports_only_the_edit(self) -> None:
         self.file.write_text(state(long_line=True))
-        edit = {"tool_name": "Edit", "tool_input": {"file_path": str(self.file), "old_string": "- done", "new_string": "- done today"}}
+        edit = {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": str(self.file),
+                "old_string": "- done",
+                "new_string": "- done today",
+            },
+        }
         r = self.hook(edit)
-        self.assertEqual((r.returncode, r.stderr), (0, ""), "an old long line elsewhere is not this edit's")
+        self.assertEqual(
+            (r.returncode, r.stderr), (0, ""), "an old long line elsewhere is not this edit's"
+        )
         long_new = "- done " + "z" * 310
         self.file.write_text(state(long_line=True).replace("- done", long_new))
-        edit["tool_input"] = {"file_path": str(self.file), "old_string": "- done", "new_string": long_new}
+        edit["tool_input"] = {
+            "file_path": str(self.file),
+            "old_string": "- done",
+            "new_string": long_new,
+        }
         r = self.hook(edit)
         self.assertEqual(r.returncode, 2)
         self.assertEqual(len(r.stderr.strip().splitlines()), 1, r.stderr)

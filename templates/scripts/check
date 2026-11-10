@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""scripts/check [--full]: runs exactly what CI runs (core). Written once by dev-ai-standards apply;
+project-owned from then on.
+
+Add this project's steps (build, lint, type checks, tests; --full adds the full suite) in
+project_steps() below, then set TODO = False. Until then this script fails on purpose, so nobody
+reports a check that never ran.
+"""
+
+from __future__ import annotations
+
+import shutil
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+CHECKS = ROOT / "docs" / "standards" / "checks"
+TODO = True  # set to False once project_steps() holds this project's own steps
+
+
+def run(name: str, cmd: list[str]) -> bool:
+    r = subprocess.run(cmd, cwd=ROOT)
+    print(f"check: {'ok  ' if r.returncode == 0 else 'FAIL'} {name}")
+    return r.returncode == 0
+
+
+def kit_steps() -> list[bool]:
+    results = [run("rules_check", [sys.executable, str(CHECKS / "rules_check.py"), "."])]
+    head = subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD"], cwd=ROOT, capture_output=True)
+    if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
+        # A PR run checks out GitHub's merge commit, which has no trailer; rules-check checks the PR's commits (F2-1).
+        print("check: skipped trailer_check (HEAD): pull_request merge commit; rules-check covers the PR's commits")
+    elif head.returncode == 0:
+        results.append(run("trailer_check (HEAD)", [sys.executable, str(CHECKS / "trailer_check.py"), "--commit", "HEAD"]))
+    # ShellCheck on every shell file; without shellcheck it prints a skip line and passes.
+    results.append(run("shellcheck", [sys.executable, str(CHECKS / "shell_lint.py"), "--all", "."]))
+    return results
+<!-- if python -->
+
+
+def ruff_cmd() -> list[str] | None:
+    if shutil.which("uv"):
+        return ["uv", "run", "ruff"]
+    if shutil.which("ruff"):
+        return ["ruff"]
+    return None
+
+
+def ruff_steps() -> list[bool]:
+    ruff = ruff_cmd()
+    if ruff is None:
+        print("check: FAIL ruff: neither uv nor ruff found (install uv: https://docs.astral.sh/uv/)")
+        return [False]
+    # Kit copies under docs/standards are checked by the kit, whatever this project's Ruff settings say.
+    excl = ["--extend-exclude", "docs/standards"]
+    return [run("ruff format", [*ruff, "format", "--check", *excl, "."]), run("ruff check", [*ruff, "check", *excl, "."])]
+
+
+def python_steps(full: bool) -> list[bool]:
+    """pyright, and with --full pytest -n auto (stacks/python.md); CI runs --full (python.yml)."""
+    if shutil.which("uv") is None:
+        print("check: FAIL pyright/pytest: uv not found (install uv: https://docs.astral.sh/uv/)")
+        return [False]
+    results = [run("pyright", ["uv", "run", "pyright"])]
+    if full:
+        results.append(run("pytest", ["uv", "run", "pytest", "-n", "auto"]))
+    return results
+<!-- endif -->
+
+
+def project_steps(full: bool) -> list[bool]:
+    """This project's own steps, in CI's order. `full` adds the full suite."""
+    return []
+
+
+def main(argv: list[str]) -> int:
+    full = "--full" in argv
+    results = kit_steps()
+<!-- if python -->
+    results += ruff_steps()
+    results += python_steps(full)
+<!-- endif -->
+    results += project_steps(full)
+    if TODO:
+        print("check: FAIL add your project's steps to scripts/check (project_steps), then set TODO = False")
+        results.append(False)
+    if not all(results):
+        print("check: failed", file=sys.stderr)
+        return 1
+    print("check: all passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
