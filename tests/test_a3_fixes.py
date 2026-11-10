@@ -389,7 +389,7 @@ class ApplyFixes(KitCase):
         self.assertIn("state_check.py --hook post-tool-use", post["hooks"][0]["command"])
         self.assertNotIn("write ", self.apply_ok(p))
 
-    def test_scripts_check_skips_trailer_on_pull_request(self) -> None:  # F2-1
+    def test_scripts_check_has_no_head_trailer_step(self) -> None:  # F2-1
         p = init_repo(self.tmp / "pr", self.home)
         self.apply_ok(p)
         commit(p, self.home, "Merge commit without a trailer\n")
@@ -398,8 +398,7 @@ class ApplyFixes(KitCase):
         r = subprocess.run(
             [str(p / "scripts/check")], cwd=p, env=e, capture_output=True, text=True, check=False
         )
-        self.assertIn("skipped trailer_check (HEAD): pull_request", r.stdout)
-        self.assertNotIn("trailer_check (HEAD): FAIL", r.stdout)
+        self.assertNotIn("trailer_check", r.stdout)  # A4: no HEAD trailer step at all
 
     def test_scripts_check_written_and_fails_until_edited(self) -> None:  # K2-2, G2
         p = init_repo(self.tmp / "p", self.home)

@@ -49,12 +49,8 @@ def run(name: str, cmd: list[str]) -> bool:
 
 def kit_steps() -> list[bool]:
     results = [run("rules_check", [sys.executable, str(CHECKS / "rules_check.py"), "."])]
-    head = subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD"], cwd=ROOT, capture_output=True)
-    if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
-        # A PR run checks out GitHub's merge commit, which has no trailer; rules-check checks the PR's commits (F2-1).
-        print("check: skipped trailer_check (HEAD): pull_request merge commit; rules-check covers the PR's commits")
-    elif head.returncode == 0:
-        results.append(run("trailer_check (HEAD)", [sys.executable, str(CHECKS / "trailer_check.py"), "--commit", "HEAD"]))
+    # No trailer check here: GitHub's own merge commits carry no trailer (A4 pilot). Trailers are
+    # checked by the commit-msg hook and by rules-check over each push or PR range.
     # ShellCheck on every shell file; without shellcheck it prints a skip line and passes.
     results.append(run("shellcheck", [sys.executable, str(CHECKS / "shell_lint.py"), "--all", "."]))
     return results
