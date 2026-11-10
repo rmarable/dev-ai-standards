@@ -21,6 +21,7 @@ Rules in these files bind as if they were here. Each add-on block below names it
 |---|---|
 | report a result, or say "done", "fixed" or "passes" | `docs/standards/refs/honesty.md` (H1-H10) |
 | use an outside source (web page, vendor doc, package, API) | `docs/standards/refs/outside-sources.md` (S1-S9) |
+| edit `README.md` or `docs/**` (not `docs/standards/**`), or write a user-facing doc | `docs/standards/refs/user-docs.md` (U1-U6) |
 | run the merge check (before staging Codex work or any merge ask) | `docs/standards/checks/README.md` (enforcement paths) |
 <!-- if high-stakes -->
 | run or brief a diff review | `docs/standards/refs/diff-review.md` |

@@ -18,6 +18,12 @@ heading becomes the tag and its date.
 
 ### Added
 
+- `refs/user-docs.md` and `.claude/rules/user-docs.md` (loaded for README.md and docs/**), plus a read-before row: rules for user-facing docs (doc rules).
+- `apply --stack python` writes `pyproject.toml` when absent; the launcher runs `uv lock` before the first commit, so python.yml passes (A4 pilot).
+- Python-stack `scripts/check` passes on a fresh project: pytest runs once tests exist, else "no tests yet"; other and iac still fail until edited (A4 pilot).
+- new-claude-project: GitHub Free's ruleset 403 on a private repo is a warning; the launcher finishes; the failure summary shows the repo's state at that moment (A4 pilot).
+- README rewritten for new users; detail moved to docs/reference.md (doc rules).
+
 - `apply --stack python` writes `.github/workflows/python.yml` (test CI, path-filtered, never required); kit CI in `.github/workflows/kit-ci.yml` (G5).
 - shell_lint checks zsh files with `zsh -n` (syntax only) and takes files from git; the pre-commit hook finds Ruff without `uv run` (F1-5, F1-6, F1-13).
 - State template renamed `templates/CLAUDE-STATE.template.md`; kit gitignore lines unanchored again (F1-3).

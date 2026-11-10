@@ -16,7 +16,13 @@
 - `uv run pytest -n auto` (pytest-xdist). Coverage on demand only.
 - Enforce package boundaries with import-linter (`uv run lint-imports`).
 - `scripts/check` runs these steps in the same order CI does (core); `apply` writes its first
-  version, which already runs Ruff. The pre-commit hook runs Ruff on staged `.py` files only.
+  version, which already runs Ruff, pyright and pytest (`pytest -q`, plus `-n auto` under `--full`;
+  "no tests yet" while `tests/` has no test files), so a fresh project passes CI. The pre-commit
+  hook runs Ruff on staged `.py` files only.
+- `apply` writes `pyproject.toml` when there is none: a virtual uv project (no build-system) named
+  after the folder, `requires-python` from the CI minimum, a `dev` group with ruff, pyright, pytest
+  and pytest-xdist, `testpaths = ["tests"]`. `new-claude-project` runs `uv lock` before the first
+  commit; elsewhere run `uv lock` and commit `uv.lock`, or CI's `uv sync --locked` fails.
 
 ## Tests
 

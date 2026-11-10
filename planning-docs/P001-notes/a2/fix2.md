@@ -127,3 +127,64 @@ of 600 words; Ruff format and check; ShellCheck 1 file; both test runs). Pyright
 - Kit `.github/workflows/kit-ci.yml`: no path filter, read-only, Python 3.9 and 3.12 (3.9 on ubuntu-24.04 unverified until A4), setup-uv for `uvx ruff`, ShellCheck installed with apt when missing (clear failure if that fails), then `./scripts/check`.
 - `astral-sh/setup-uv` SHA is a placeholder (40 zeros): no network to look it up; both files say so next to `TODO pin: verify at A4`.
 - stacks/python.md points to the template; stacks/other.md has the pattern line; README mentions both. Tests: python stack fills placeholders (3.11/3.13, single 3.13, default 3.12/3.13); other and iac don't install it; text checks of both files.
+
+## A4 pilot fixes
+
+Two bugs from the live pilot, 2026-11-10 (operator-approved).
+
+- Stale failure summary: `bin/new-claude-project` printed "git repo in ... (branch main, no commits
+  yet)" beside "first commit c8f3304 on main" after a later ruleset 403. `Run.report` now computes
+  the repo line when it prints (`git symbolic-ref`, `git rev-parse --verify -q --short HEAD`); the
+  separate commit line is gone. Tests: a fake `gh` whose ruleset call fails (422) after repo create;
+  the summary shows `commit <sha>` and not "no commits yet"; a declined run still says "no commits
+  yet".
+- GitHub Free ruleset 403 (stderr has "403" and "upgrade" or "public"): warning "GitHub Free: no
+  ruleset on a private repo; protection is CI plus the reminders", no further rulesets tried, then
+  Claude opens or next steps print, exit 0. Any other ruleset failure (including another 403) still
+  stops. Tests for both.
+- Python CI failed on "No pyproject.toml found": `templates/pyproject.toml` (virtual uv project:
+  name from the folder, normalized; `version = "0.1.0"`; `requires-python = ">={{python_min}}"`;
+  `dependencies = []`; dev group ruff, pyright, pytest, pytest-xdist; `testpaths = ["tests"]`; no
+  build-system) written by `apply --stack python` only when absent, else a note. In `NOT_COPIED`
+  like `ruff.toml` (an unrendered `{{python_min}}` is not a valid specifier). The launcher runs
+  `uv lock` after apply and the M1 stub, before the file list and the commit; without uv, or if
+  `uv lock` fails, it warns that CI's `uv sync --locked` fails until `uv lock` runs. Tests: fake
+  `uv` logs `lock` and `uv.lock` is in the first commit; no uv on PATH warns.
+- Python-stack `scripts/check` template: `TODO = False`; pyright, then `pytest -q` (plus `-n auto`
+  under `--full`) only when `tests/` has `test_*.py` or `*_test.py`, else "no tests yet" and pass.
+  Each tool via `uv run <tool>`, else the tool on PATH, else a FAIL line. K2-2's intent kept for
+  `other` and `iac`: `TODO = True` and the "add your project's steps" failure, since the kit can't
+  know their steps. python.yml unchanged in steps (`uv sync --locked`, `scripts/check --full`); its
+  comments now say where `pyproject.toml` and `uv.lock` come from. Tests: fresh python project
+  passes with fake ruff/pyright/pytest and no uv; pytest runs `-q` / `-q -n auto` with a test file;
+  other and iac still fail.
+- Checked by hand with the real uv (network), not in the suite: fresh `apply --stack python`,
+  `uv lock`, commit, `uv sync --locked`, `uv run python scripts/check --full` all passed (Python
+  3.15.2 picked by uv); with a test file, pytest passed too.
+
+## Doc rules
+
+Operator-approved 2026-11-10.
+
+- `refs/user-docs.md` (U1-U6: audience, voice, banned words, shape, accuracy, terms), in `ALWAYS`,
+  so it is a kit file in the manifest. core.md unchanged.
+- `.claude/rules/user-docs.md` written like `.claude/rules/state-file.md`: a second fixed manifest
+  key (`rules_check.FIXED_RULES`), in the upgrade set, rewritten on each apply with an edited-file
+  note. Frontmatter `paths: ["README.md", "docs/**"]`; `docs/standards/**` is excluded in the body
+  only, since no exclusion form for `paths` was verified (unverified whether one exists).
+- Read-before row (template and `KIT_READ_BEFORE`, so `apply` adds it to existing tables and
+  `rules_check` requires it): edit `README.md` or `docs/**` (not `docs/standards/**`) ->
+  `docs/standards/refs/user-docs.md`.
+- checks/README updated (upgrade set, manifest format). Tests: rule file, manifest keys, row in new
+  and existing AGENTS.md, drift catches edits to the ref and to the rule.
+- Kit README replaced and `docs/reference.md` added from the supplied drafts, then updated for the
+  A4 fixes (scripts/check row, python `pyproject.toml` and `uv.lock`, the Free 403 warning; in the
+  reference also the uv prerequisite, launcher steps, what apply writes, the user-docs rule, kit-owned
+  text and the upgrade set). README 687 words (wc -w). Banned-word grep clean (the only hits:
+  `operator`, the literal `--owner` default; `P001` in a link path). Flags checked against `--help`
+  of new-claude-project, apply, drift and promote.
+
+Results (A4 pilot fixes and doc rules together), 2026-11-10: `unittest discover -s tests` 156 pass
+on Python 3.12.14 and on 3.9.6 (`/usr/bin/python3`), 15 new. `./scripts/check` passes (core.md 597
+of 600 words; Ruff format and check; ShellCheck 1 file; both test runs). Pyright on `checks tests`:
+0 errors, 0 warnings.

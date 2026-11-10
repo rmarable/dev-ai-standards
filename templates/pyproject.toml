@@ -1,0 +1,14 @@
+# Written once by dev-ai-standards apply --stack python when the project has no pyproject.toml;
+# project-owned from then on. A virtual uv project (no build-system): uv lock and uv sync work,
+# nothing is built or installed as a package.
+[project]
+name = "{{project_name}}"
+version = "0.1.0"
+requires-python = ">={{python_min}}"
+dependencies = []
+
+[dependency-groups]
+dev = ["ruff", "pyright", "pytest", "pytest-xdist"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

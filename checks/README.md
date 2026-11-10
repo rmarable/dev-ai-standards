@@ -86,7 +86,7 @@ A branch's edit to its own manifest therefore changes nothing, except in a kit u
 version changes kit text and the manifest together. `rules_check` then checks against the branch's
 own manifest instead of the base's only when all of these hold:
 - every changed path is in a fixed set, never read from any manifest: `docs/standards/**` (the
-  manifest included), `.claude/rules/state-file.md`, `AGENTS.md` and `CLAUDE.md`; in the last two, only text inside kit blocks and
+  manifest included), `.claude/rules/state-file.md`, `.claude/rules/user-docs.md`, `AGENTS.md` and `CLAUDE.md`; in the last two, only text inside kit blocks and
   the `Standards:` line changed;
 - the `Standards:` line names a strictly newer version (semantic-version order) than the base's;
 - the branch's kit files and blocks match the branch's manifest.
@@ -104,8 +104,9 @@ remove any kit file or block, the checks included, and nothing ties it to a real
 PR review compares the kit diff with the kit's `CHANGELOG.md`.
 
 Manifest format, written only by `apply`: one line per kit file or block,
-`<sha256 hex>  docs/standards/<path>`, `<sha256 hex>  .claude/rules/state-file.md` (one fixed
-literal: Claude Code reads rules only from `.claude/rules/`) or
+`<sha256 hex>  docs/standards/<path>`, `<sha256 hex>  .claude/rules/state-file.md` or
+`.claude/rules/user-docs.md` (two fixed literals: Claude Code reads rules only from
+`.claude/rules/`) or
 `<sha256 hex>  <AGENTS.md|CLAUDE.md>#<block>`. A block's hash covers the exact text between its two
 markers, markers excluded. Any other key (`..`, an absolute path, a backslash, another path outside
 `docs/standards/`, an unknown block) fails the check and stops `apply`.

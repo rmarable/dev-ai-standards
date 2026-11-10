@@ -417,7 +417,7 @@ class ApplyFixes(KitCase):
         self.apply_ok(q, "--stack", "python")
         text = (q / "scripts/check").read_text()
         self.assertIn('"format", "--check"', text)
-        self.assertIn('["uv", "run", "ruff"]', text)
+        self.assertIn('["uv", "run", tool]', text)
         (q / "scripts/check").write_text("mine\n")
         self.apply_ok(q, "--stack", "python")
         self.assertEqual((q / "scripts/check").read_text(), "mine\n")

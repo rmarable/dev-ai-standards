@@ -32,6 +32,9 @@ STANDARDS_DIR = "docs/standards"
 # The state-file path rule: kit text outside docs/standards/ (Claude Code reads rules only from
 # .claude/rules/). One fixed literal, in the manifest and the upgrade set (F1-9).
 STATE_RULE = ".claude/rules/state-file.md"
+# The user-docs path rule (doc rules, 2026-11-10): written like STATE_RULE, the same treatment.
+USER_DOCS_RULE = ".claude/rules/user-docs.md"
+FIXED_RULES = (STATE_RULE, USER_DOCS_RULE)
 DEFAULT_BUDGET = 24 * 1024
 BASE_CANDIDATES = ("origin/main", "main")
 
@@ -93,11 +96,11 @@ def manifest_key_problem(key: str) -> str | None:
     """Why `key` can't be a manifest entry, or None.
 
     Allowed: a plain relative path under docs/standards/ (not the manifest itself), the one
-    fixed path STATE_RULE, or AGENTS.md#<block> / CLAUDE.md#<block> with a known block name.
+    fixed paths in FIXED_RULES, or AGENTS.md#<block> / CLAUDE.md#<block> with a known block name.
     Nothing else, ever: the manifest never decides which other paths count as kit text (K1-2,
     K1-5, F1-9).
     """
-    if key == STATE_RULE:
+    if key in FIXED_RULES:
         return None
     if "#" in key:
         fname, _, name = key.partition("#")
@@ -231,8 +234,8 @@ def drift_findings(root: Path, manifest: dict[str, str]) -> list[str]:  # noqa: 
 STANDARDS_LINE_RE = re.compile(r"(?m)^Standards: dev-ai-standards v(\S+) \(.*\)[ \t]*$")
 VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?")
 UPGRADE_SCOPE_MSG = (
-    "kit upgrade PRs may change only docs/standards/**, .claude/rules/state-file.md, and kit"
-    " blocks and the Standards line in AGENTS.md and CLAUDE.md"
+    "kit upgrade PRs may change only docs/standards/**, .claude/rules/state-file.md,"
+    " .claude/rules/user-docs.md, and kit blocks and the Standards line in AGENTS.md and CLAUDE.md"
 )
 
 
@@ -282,7 +285,7 @@ def resolve_base(root: Path, base: str | None) -> str | None:
 
 def in_upgrade_set(path: str) -> bool:
     """The fixed set a pure upgrade may touch; never derived from any manifest (K1-2, F1-9)."""
-    return path.startswith(STANDARDS_DIR + "/") or path in BLOCK_FILES or path == STATE_RULE
+    return path.startswith(STANDARDS_DIR + "/") or path in BLOCK_FILES or path in FIXED_RULES
 
 
 def upgrade_check(  # noqa: PLR0912 (one linear command flow)
@@ -489,6 +492,7 @@ def has_import(claude_md: str) -> bool:
 KIT_READ_BEFORE = (
     "docs/standards/refs/honesty.md",
     "docs/standards/refs/outside-sources.md",
+    "docs/standards/refs/user-docs.md",
     "docs/standards/checks/README.md",
     "docs/standards/refs/diff-review.md",
 )

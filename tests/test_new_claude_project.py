@@ -34,6 +34,7 @@ case "$1 $2" in
   "api "*)
     cat >> "$FAKE_LOG_DIR/gh-api-input.log"
     echo >> "$FAKE_LOG_DIR/gh-api-input.log"
+    if [ -n "$FAKE_GH_RULESET_ERR" ]; then echo "$FAKE_GH_RULESET_ERR" >&2; exit 1; fi
     exit 0 ;;
 esac
 exit 0
@@ -322,6 +323,118 @@ class LauncherTest(unittest.TestCase):
         code, out = self.run_in_pty(["demo", "--public"], "\n\nn\nnope\ny\n")
         self.assertEqual(code, 1, out)
         self.assertNotIn("repo create", self.log("gh.log"))
+
+    # A4 pilot fixes.
+    FREE_403 = (
+        "gh: Upgrade to GitHub Pro or make this repository public to enable this feature."
+        " (HTTP 403)"
+    )
+
+    def test_ruleset_failure_summary_is_fresh(self) -> None:
+        # Repo create and push succeed, then the ruleset call fails (not the Free 403): the
+        # summary shows the first commit and never "no commits yet".
+        code, out = self.run_in_pty(
+            ["demo", "--no-launch"],
+            "\n\nn\ny\n",
+            NEW_CLAUDE_PROJECT_GH_PLAN="pro",
+            FAKE_GH_RULESET_ERR="gh: Validation Failed (HTTP 422)",
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("ruleset 'main' failed", out)
+        self.assertIn("repo create rmarable/demo --private", self.log("gh.log"))
+        head = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=self.src / "demo",
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        summary = out.split("Already exists", 1)[1]
+        self.assertIn(f"(branch main, commit {head})", summary)
+        self.assertNotIn("no commits yet", summary)
+
+    def test_summary_before_commit_says_no_commits(self) -> None:
+        code, out = self.run_in_pty(["demo", "--no-launch"], "\n\nn\n\x04")
+        self.assertEqual(code, 1, out)
+        self.assertIn("(branch main, no commits yet)", out)
+
+    def test_free_plan_403_warns_and_finishes(self) -> None:
+        code, out = self.run_in_pty(
+            ["demo"],
+            "\n\nn\ny\n",
+            NEW_CLAUDE_PROJECT_GH_PLAN="pro",
+            FAKE_GH_RULESET_ERR=self.FREE_403,
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn(
+            "Warning: GitHub Free: no ruleset on a private repo; protection is CI plus the"
+            " reminders",
+            out,
+        )
+        self.assertNotIn("stopped", out)
+        self.assertIn("Read AGENTS.md", self.log("claude.log"))
+        code, out = self.run_in_pty(
+            ["demo2", "--no-launch"],
+            "\n\nn\ny\n",
+            NEW_CLAUDE_PROJECT_GH_PLAN="pro",
+            FAKE_GH_RULESET_ERR=self.FREE_403,
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn("Next steps:", out)
+
+    def test_other_403_still_stops(self) -> None:
+        code, out = self.run_in_pty(
+            ["demo", "--no-launch"],
+            "\n\nn\ny\n",
+            NEW_CLAUDE_PROJECT_GH_PLAN="pro",
+            FAKE_GH_RULESET_ERR="gh: Resource not accessible by integration (HTTP 403)",
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("stopped: ruleset 'main' failed", out)
+        self.assertNotIn("GitHub Free: no ruleset", out)
+
+    def fake_uv(self) -> Path:
+        uvbin = self.tmp / "uvbin"
+        uvbin.mkdir()
+        write_exe(
+            uvbin / "uv",
+            '#!/bin/sh\necho "$PWD|$*" >> "$FAKE_LOG_DIR/uv.log"\n'
+            '[ "$1" = lock ] && echo "# fake lock" > uv.lock\nexit 0\n',
+        )
+        return uvbin
+
+    def git_out(self, target: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=target, env=self.env, text=True, capture_output=True, check=True
+        ).stdout
+
+    @unittest.skipIf(USE_FAKE_APPLY, "needs the real apply (writes pyproject.toml)")
+    def test_python_stack_runs_uv_lock_before_first_commit(self) -> None:
+        path = f"{self.fake_uv()}{os.pathsep}{self.env['PATH']}"
+        res = self.run_script("demo", "--local", "--stack", "python", PATH=path)
+        self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
+        target = self.src / "demo"
+        calls = [ln.split("|", 1) for ln in self.log("uv.log").splitlines()]
+        self.assertEqual([c[1] for c in calls], ["lock"])
+        self.assertEqual(Path(calls[0][0]).resolve(), target.resolve())
+        files = self.git_out(target, "ls-tree", "-r", "--name-only", "HEAD").split()
+        self.assertIn("uv.lock", files)
+        self.assertIn("pyproject.toml", files)
+        self.assertEqual(self.git_out(target, "status", "--porcelain"), "")
+
+    @unittest.skipIf(USE_FAKE_APPLY, "needs the real apply (writes pyproject.toml)")
+    def test_python_stack_without_uv_warns(self) -> None:
+        # PATH without uv: the fake tools, git's and the shell's own directories only.
+        git_dir = Path(shutil.which("git") or "/usr/bin/git").parent
+        dirs = [str(self.tmp / "fakebin"), str(git_dir), "/usr/bin", "/bin"]
+        self.assertFalse(any((Path(d) / "uv").exists() for d in dirs), "uv found on test PATH")
+        res = self.run_script("demo", "--local", "--stack", "python", PATH=os.pathsep.join(dirs))
+        self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
+        self.assertIn("Warning: uv not found", res.stdout)
+        self.assertIn("uv sync --locked", res.stdout)
+        files = self.git_out(self.src / "demo", "ls-tree", "-r", "--name-only", "HEAD").split()
+        self.assertNotIn("uv.lock", files)
 
 
 if __name__ == "__main__":

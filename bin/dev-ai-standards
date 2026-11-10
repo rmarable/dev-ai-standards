@@ -60,17 +60,27 @@ T_RUFF = "templates/ruff.toml"
 # Python stack only (G5): test CI, written once to .github/workflows/python.yml.
 T_PYTHON_CI = "templates/ci/python.yml"
 PYTHON_CI = ".github/workflows/python.yml"
+# Python stack only (A4 pilot fix): a virtual uv project, written when there is no pyproject.toml,
+# so python.yml's `uv sync --locked` has a project to sync.
+T_PYPROJECT = "templates/pyproject.toml"
 DEFAULT_PYTHON_MIN = 12
 DEFAULT_PYTHON_LATEST = 13
 # Templates rendered into the project but never copied verbatim into docs/standards/: an
 # unrendered {{python_target}} would break every Ruff run that walks docs/standards/.
-NOT_COPIED = {T_RUFF}
+NOT_COPIED = {T_RUFF, T_PYPROJECT}
 GITIGNORE_HEADER = "# dev-ai-standards"
 SNIPPET_CLAUDE = "snippets/claude-settings.json"
 SNIPPET_CODEX = "snippets/codex-config.toml"
 SETTINGS_KEYS = ("env", "attribution", "permissions")
 STATE_RULE = rc.STATE_RULE
 STATE_LOADER = "CLAUDE.local.md"
+# `paths` has no exclusion form we have verified, so the docs/standards/ exception is in the body.
+USER_DOCS_RULE_TEXT = (
+    '---\npaths: ["README.md", "docs/**"]\n---\n\n# User docs\n\n'
+    "Before editing README.md or a file under docs/, read `docs/standards/refs/user-docs.md`;"
+    " its rules bind as if they were here. Not for `docs/standards/**`: those are kit copies,"
+    " changed only by a kit upgrade.\n"
+)
 
 # Every project gets state-file, planning and multi-session (kit README, W2 templates).
 ALWAYS_ADDONS = ("state-file", "planning", "multi-session")
@@ -78,6 +88,7 @@ ALWAYS = [
     "core.md",
     "refs/honesty.md",
     "refs/outside-sources.md",
+    "refs/user-docs.md",
     "checks/README.md",
     "checks/rules_check.py",
     "checks/trailer_check.py",
@@ -594,6 +605,11 @@ def render_python_ci(chosen: set[str], values: dict[str, str]) -> str:
     return text
 
 
+def project_name(name: str) -> str:
+    """A [project] name from a directory name: lowercase, runs of '-', '_', '.' as one '-'."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
 def ruff_settings(root: Path) -> str | None:
     """Where the project already keeps Ruff settings, or None."""
     for name in ("ruff.toml", ".ruff.toml"):
@@ -717,6 +733,7 @@ def cmd_apply(args: argparse.Namespace) -> int:  # noqa: PLR0912, PLR0915 (one l
         "python_target": python_target(root),
         "python_min": python_versions(root)[0],
         "python_latest": python_versions(root)[1],
+        "project_name": project_name(root.name),
     }
 
     old_manifest: dict[str, str] = {}
@@ -759,6 +776,20 @@ def cmd_apply(args: argparse.Namespace) -> int:  # noqa: PLR0912, PLR0915 (one l
         )
     plan.write(STATE_RULE, rule, "state-file path rule")
     manifest[STATE_RULE] = rc.sha256_bytes(rule)
+    # The user-docs rule, the same way: Claude Code loads it only for README.md and docs/**.
+    docs_rule = USER_DOCS_RULE_TEXT.encode()
+    cur = root / rc.USER_DOCS_RULE
+    if (
+        cur.is_file()
+        and cur.read_bytes() != docs_rule
+        and old_manifest.get(rc.USER_DOCS_RULE) != rc.sha256_bytes(cur.read_bytes())
+    ):
+        plan.notes.append(
+            f"{rc.USER_DOCS_RULE} was edited in the project; the kit's path rule replaces it (use"
+            " Overrides or promote)"
+        )
+    plan.write(rc.USER_DOCS_RULE, docs_rule, "user-docs path rule")
+    manifest[rc.USER_DOCS_RULE] = rc.sha256_bytes(docs_rule)
 
     std_root = (root / rc.STANDARDS_DIR).resolve()
     for dest in sorted(old_manifest):
@@ -845,6 +876,12 @@ def cmd_apply(args: argparse.Namespace) -> int:  # noqa: PLR0912, PLR0915 (one l
     ):
         plan.executable.add("scripts/check")
     if args.stack == "python":
+        if not plan.write_if_absent(
+            "pyproject.toml",
+            render_template(T_PYPROJECT, chosen, values).encode(),
+            "python stack, from template; run uv lock",
+        ):
+            plan.notes.append("pyproject.toml already exists; left as is (project-owned)")
         where = ruff_settings(root)
         if where:
             plan.notes.append(

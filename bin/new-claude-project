@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -46,19 +47,38 @@ class Stop(Exception):
 
 
 class Run:
-    """What this run has made so far, for the failure report. Nothing is ever deleted."""
+    """What this run has made so far, for the failure report. Nothing is ever deleted.
+
+    The git repo's line is computed when the report prints, not when the repo was made (A4 pilot:
+    a stale "no commits yet" next to the first commit), so it describes the state at the failure.
+    """
 
     def __init__(self) -> None:
         self.made: list[str] = []
+        self.repo: Path | None = None
+        self.repo_at = 0
 
     def note(self, what: str) -> None:
         self.made.append(what)
 
+    def note_repo(self, target: Path) -> None:
+        self.repo, self.repo_at = target, len(self.made)
+        self.made.append("")
+
+    @staticmethod
+    def repo_line(repo: Path) -> str:
+        branch = sh(["git", "symbolic-ref", "--short", "-q", "HEAD"], cwd=repo).stdout.strip()
+        head = sh(["git", "rev-parse", "--verify", "-q", "--short", "HEAD"], cwd=repo)
+        state = f"commit {head.stdout.strip()}" if head.returncode == 0 else "no commits yet"
+        return f"git repo in {repo} (branch {branch or 'unknown'}, {state})"
+
     def report(self) -> None:
         if self.made:
             print("Already exists (left in place, nothing deleted):", file=sys.stderr)
-            for item in self.made:
-                print(f"  - {item}", file=sys.stderr)
+            for i, item in enumerate(self.made):
+                repo = self.repo
+                line = self.repo_line(repo) if repo is not None and i == self.repo_at else item
+                print(f"  - {line}", file=sys.stderr)
         else:
             print("Nothing was created.", file=sys.stderr)
 
@@ -272,7 +292,7 @@ def build(args: argparse.Namespace, target: Path, apply_bin: Path, run: Run) -> 
     init = sh(["git", "init", "-b", "main"], cwd=target)
     if init.returncode != 0:
         raise Stop(f"git init failed: {first_line(init.stderr)}")
-    run.note(f"git repo in {target} (branch main, no commits yet)")
+    run.note_repo(target)
     applied = sh(apply_cmd(args, apply_bin, target), cwd=target)
     sys.stdout.write(applied.stdout)
     if applied.returncode != 0:
@@ -286,10 +306,27 @@ def build(args: argparse.Namespace, target: Path, apply_bin: Path, run: Run) -> 
         stub.parent.mkdir(parents=True, exist_ok=True)
         stub.write_text(m1_stub(args))
         run.note(f"M1 stub {stub}")
+    uv_lock(target, run)
     listing = sh(["git", "ls-files", "--others", "--exclude-standard"], cwd=target)
     if listing.returncode != 0:
         raise Stop(f"git ls-files failed: {first_line(listing.stderr)}")
     return sorted(listing.stdout.splitlines())
+
+
+def uv_lock(target: Path, run: Run) -> None:
+    """Lock a python-stack project before the first commit, so CI's `uv sync --locked` passes."""
+    if not (target / "pyproject.toml").is_file():
+        return
+    warn = "CI's `uv sync --locked` (python.yml) fails until you run `uv lock` and commit uv.lock"
+    if shutil.which("uv") is None:
+        print(f"Warning: uv not found, so uv.lock not written; {warn}")
+        return
+    locked = sh(["uv", "lock"], cwd=target)
+    if locked.returncode != 0:
+        print(f"Warning: uv lock failed ({first_line(locked.stderr or locked.stdout)}); {warn}")
+        return
+    run.note(f"uv.lock in {target}")
+    print("Locked: uv lock wrote uv.lock.")
 
 
 def secret_scan(target: Path, files: list[str]) -> list[str]:
@@ -391,6 +428,12 @@ def remote_actions(args: argparse.Namespace) -> list[str]:
     return acts
 
 
+def free_plan_refusal(text: str) -> bool:
+    """A ruleset 403 that says to upgrade or make the repo public: GitHub Free on a private repo."""
+    low = text.lower()
+    return "403" in low and ("upgrade" in low or "public" in low)
+
+
 def go_remote(args: argparse.Namespace, target: Path, run: Run) -> None:
     repo = f"{OWNER}/{args.name}"
     vis = "--public" if args.public else "--private"
@@ -410,6 +453,13 @@ def go_remote(args: argparse.Namespace, target: Path, run: Run) -> None:
             ["gh", "api", "--method", "POST", f"repos/{repo}/rulesets", "--input", "-"],
             input_text=json.dumps(body),
         )
+        if made.returncode != 0 and free_plan_refusal(made.stderr + made.stdout):
+            # The known GitHub Free limit (A4 pilot): a warning, not a stop; nothing else to try.
+            print(
+                "Warning: GitHub Free: no ruleset on a private repo; protection is CI plus the"
+                f" reminders. (gh: {first_line(made.stderr or made.stdout)})"
+            )
+            return
         if made.returncode != 0:
             raise Stop(f"ruleset '{body['name']}' failed: {first_line(made.stderr)}")
         run.note(f"ruleset '{body['name']}' on {repo}")
@@ -448,6 +498,8 @@ def dry_run(args: argparse.Namespace, target: Path, apply_bin: Path) -> None:
     print(f"Would create {target} and run: git init -b main")
     print("Would run: " + " ".join(apply_cmd(args, apply_bin, target)))
     print(f"Would write {milestone_path(args.name)} (unless apply wrote it)")
+    if args.stack == "python":
+        print("Would run: uv lock (if uv is installed), so uv.lock is in the first commit")
     if args.local:
         print(f"Would commit locally (subject '{SUBJECT}'); no remote actions (--local).")
     else:

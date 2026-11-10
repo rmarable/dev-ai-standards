@@ -43,9 +43,12 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      # Needs pyproject.toml and uv.lock: apply --stack python writes the first, and
+      # new-claude-project runs `uv lock` before the first commit (run it yourself otherwise).
       - name: Install (locked)
         run: uv sync --locked
 
-      # The project's check entry: ruff, pyright and pytest -n auto (scripts/check --full).
+      # The project's check entry (scripts/check --full): Ruff, pyright, and pytest -q -n auto
+      # once tests/ has test files ("no tests yet" before that).
       - name: scripts/check --full
         run: uv run python scripts/check --full
