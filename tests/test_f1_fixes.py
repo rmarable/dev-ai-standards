@@ -8,8 +8,10 @@ shell files (F1-13), and the python test workflow (G5). Fake keys are built at r
 
 import os
 import re
+import shutil
 import subprocess
 import sys
+import unittest
 from pathlib import Path
 
 from helpers import OUT, commit, env, git, init_repo, msg, py, write_exe
@@ -142,6 +144,7 @@ class ShellLintFixes(KitCase):
         p = self.logs / "calls.log"
         return p.read_text().splitlines() if p.exists() else []
 
+    @unittest.skipUnless(shutil.which("zsh"), "zsh not installed: zsh -n checks untestable here")
     def test_zsh_listed_not_checked_bash_and_sh_checked(self) -> None:
         commit(
             self.repo,
@@ -161,6 +164,7 @@ class ShellLintFixes(KitCase):
         self.assertIn("zsh: syntax only (ShellCheck doesn't support zsh): y.zsh", r.stdout)
         self.assertEqual(self.calls(), ["shellcheck -- b k s.sh"])
 
+    @unittest.skipUnless(shutil.which("zsh"), "zsh not installed: zsh -n checks untestable here")
     def test_zsh_shebang_wins_over_sh_suffix(self) -> None:  # F2-2
         commit(
             self.repo,
@@ -173,6 +177,7 @@ class ShellLintFixes(KitCase):
         self.assertIn("zsh: syntax only (ShellCheck doesn't support zsh): x.sh", r.stdout)
         self.assertEqual(self.calls(), ["shellcheck -- p.sh"])
 
+    @unittest.skipUnless(shutil.which("zsh"), "zsh not installed: zsh -n checks untestable here")
     def test_zsh_syntax_error_fails(self) -> None:  # operator decision 2026-11-10: zsh -n
         commit(self.repo, self.home, msg("Bad zsh"), {"bad.zsh": "if then fi (\n"})
         r = self.lint(self.repo, "--all")

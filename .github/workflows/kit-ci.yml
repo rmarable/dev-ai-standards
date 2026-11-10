@@ -28,7 +28,6 @@ jobs:
 
       # uv fetches each Python itself (scripts/check: uv run --python); no setup-python step.
       - name: Set up uv
-        # The SHA below is a placeholder (not known offline): set the release's full commit SHA.
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0 (same pin as ecf CI)
 
       - name: ShellCheck (install if missing)
@@ -40,6 +39,18 @@ jobs:
             shellcheck --version | head -2
           else
             echo "kit-ci: FAIL could not install shellcheck with apt"
+            exit 1
+          fi
+
+      - name: zsh (install if missing; shell_lint checks zsh files with zsh -n)
+        run: |
+          set -eu
+          if command -v zsh >/dev/null 2>&1; then
+            zsh --version
+          elif sudo apt-get install -y -q zsh; then
+            zsh --version
+          else
+            echo "kit-ci: FAIL could not install zsh with apt"
             exit 1
           fi
 
