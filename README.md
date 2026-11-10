@@ -39,26 +39,26 @@ it stops and deletes nothing.
 
 ## The core rules, in brief
 
-- Don't lie or make up facts; a verified fact cites its source and date.
-- Confirm with you before writing files, committing or pushing, unless an approver granted a scoped approval (a recorded permission for one step).
-- `main` changes only through a pull request with a merge commit; your approval or merge is the OK.
-- After every push, watch GitHub's automatic checks to the end; a failed run stops the next step.
-- One co-author trailer per commit: `Claude <noreply@anthropic.com>` or `Codex <noreply@openai.com>`, by which agent did the work; never a model name.
-- Secrets live only in a secret store, never in the repo, environment or files.
+- Agents don't lie or make up facts. A verified fact cites its source and date.
+- Agents confirm with you before they write files, commit or push, unless an approver granted a scoped approval (a recorded permission for one step).
+- `main` changes only through a pull request with a merge commit. Your approval or merge is the OK.
+- After every push, the agent watches GitHub's automatic checks to the end. A failed run stops the next step.
+- Each commit has exactly one co-author trailer, naming the agent that did the work: `Claude <noreply@anthropic.com>` or `Codex <noreply@openai.com>`. It never names a model.
+- Secrets live only in a secret store, never in the repo, the environment or files.
 
 ## Options
 
-- **Core** (default): the rules above only.
-- **`--high-stakes`**: sized reviews before building, and a full test gate with nothing skipped on every merge.
-- **`--codex`**: Codex works only in its own `codex/<topic>` branch and worktree, without git writes; Claude Code reviews, commits and opens the pull request.
-- **`--stack python`**: uv, Ruff, pyright and pytest, with `pyproject.toml`, and `uv.lock` in new projects, so GitHub's checks pass from the first push.
-- **`--stack iac`**: AWS guidance for infrastructure code.
-- **`--stack other`** (default): no toolchain rules; you list the project's commands.
+- **Core** is the default. The project gets only the rules above.
+- **`--high-stakes`** adds sized reviews before building, and a full test gate with nothing skipped on every merge.
+- **`--codex`** lets Codex work in its own `codex/<topic>` branch and worktree, without git writes. Claude Code reviews its work, commits and opens the pull request.
+- **`--stack python`** sets up uv, Ruff, pyright and pytest. It writes `pyproject.toml`, and `uv.lock` in new projects, so GitHub's checks pass from the first push.
+- **`--stack iac`** adds AWS guidance for infrastructure code.
+- **`--stack other`** is the default stack. It adds no toolchain rules, and you list the project's commands.
 
 ## Joining a project
 
 1. Clone the repository.
-2. Run `scripts/setup`: it checks your tools, then turns on the git hooks unless your clone uses
+2. Run `scripts/setup`. It checks your tools, then turns on the git hooks unless your clone uses
    other hooks.
 3. Put personal preferences in `~/.claude/CLAUDE.md` (Codex: `~/.codex/AGENTS.md`), not in the
    repository.
@@ -80,15 +80,15 @@ rest goes in a second one.
 
 ## Limits
 
-- Hooks are reminders; `git commit --no-verify` skips them. GitHub's automatic checks are the real check.
-- Required reviews and branch protection on private repos need a paid GitHub plan (Team or Pro; unverified); on GitHub Free, rely on GitHub's automatic checks and the reminders.
-- Agents can't verify who is typing; `## People` is a policy, not a login.
+- Hooks are reminders, and `git commit --no-verify` skips them. GitHub's automatic checks are the real check.
+- Required reviews and branch protection on private repos need a paid GitHub plan (Team or Pro, unverified). On GitHub Free, you rely on GitHub's automatic checks and the reminders.
+- Agents can't verify who is typing. `## People` is a policy, not a login.
 - The secret scan is a tripwire for common credential formats, not a guarantee.
 - The iac stack is unproven: no project has used it.
 
 ## More
 
-- [docs/reference.md](docs/reference.md): flags, variables, files written.
-- [checks/README.md](checks/README.md): what each check enforces.
-- [CHANGELOG.md](CHANGELOG.md): changes by version.
-- [Design plan](planning-docs/P001-dev-ai-standards.md): decisions and rejected options.
+- [docs/reference.md](docs/reference.md) lists the flags, the environment variables and the files the kit writes.
+- [checks/README.md](checks/README.md) describes what each check enforces.
+- [CHANGELOG.md](CHANGELOG.md) lists the changes in each version.
+- The [design plan](planning-docs/P001-dev-ai-standards.md) records the decisions and the options that were rejected.
