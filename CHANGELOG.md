@@ -6,7 +6,14 @@ versioning; at tagging, the heading becomes the tag and its date.
 
 ## Unreleased
 
+### Added
+
+- rules_check fails a supersede link between decisions or ADRs that is broken or one-way, and a decision or ADR ID defined twice (operator decision 2026-11-10).
+- rules_check fails a file added under planning-docs/ without an ID in its name or folder and first line; existing files are never checked (operator decision 2026-11-10).
+
 ### Changed
+
+- The planning add-on defines every record's ID and how to retire a decision; milestone Decisions lines now carry `OD-` IDs (operator decision 2026-11-10).
 
 - User docs must use complete sentences (U2), and the README, docs/reference.md, checks/README.md and this file now do (operator decision 2026-11-10).
 - The co-author trailer rule says never a model name; README and docs say "GitHub's automatic checks" and "fingerprint" for CI and hash (operator decision 2026-11-10).

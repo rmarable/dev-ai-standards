@@ -725,6 +725,178 @@ def placeholder_failures(
     ], []
 
 
+# Retiring a decision (planning add-on, "Retiring a decision"): the old record says "superseded by
+# <ID>" and the new one says "Supersedes <ID>". Only definition lines and ADR files are read, so
+# prose that merely mentions an ID never counts.
+REF_ID = r"(ADR|OD)[- ](NEW(?:-\d+)?|\d+)(?![A-Za-z0-9-])"
+SUPERSEDED_BY_RE = re.compile(r"\bsuperseded\s+by\s+" + REF_ID, re.IGNORECASE)
+SUPERSEDES_RE = re.compile(r"\bsupersedes\s+" + REF_ID, re.IGNORECASE)
+OD_DEF_RE = re.compile(
+    r"\s{0,3}(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)?(?:\*\*|__)?"
+    r"OD-(NEW(?:-\d+)?|\d+)(?:\*\*|__)?\s*:"
+)
+LIST_ITEM_RE = re.compile(r"\s*(?:[-*+]|\d+[.)])\s")
+ADR_TITLE_RE = re.compile(r"#\s*ADR[- ](NEW(?:-\d+)?|\d+)(?![A-Za-z0-9-])", re.IGNORECASE)
+ADR_FILE_RE = re.compile(r"(\d+)-")
+
+
+def id_key(kind: str, num: str) -> str:
+    """One spelling per record: OD-12, ADR-3, OD-NEW-1 (zero padding and case dropped)."""
+    kind, num = kind.upper(), num.upper()
+    return f"{kind}-{int(num)}" if num.isdigit() else f"{kind}-{num}"
+
+
+def scanned_markdown(root: Path) -> list[tuple[str, str]]:
+    """(path, scannable text) for tracked Markdown files outside the kit copies."""
+    r = git(root, "ls-files", "-z", "--cached", check=False)
+    out: list[tuple[str, str]] = []
+    for rel in sorted({n for n in r.stdout.split("\0") if n}):
+        p = root / rel
+        if rel.startswith(STANDARDS_DIR + "/") or rel in FIXED_RULES:
+            continue
+        if not rel.lower().endswith(MARKDOWN_EXTS) or not p.is_file():
+            continue
+        if p.stat().st_size > MAX_SCAN_BYTES:
+            continue
+        raw = p.read_text(encoding="utf-8", errors="replace")
+        try:
+            out.append((rel, scannable_text(rel, raw)))
+        except CheckError:
+            out.append((rel, scannable_text(rel + ".unparsed", raw)))
+    return out
+
+
+def record_definitions(root: Path) -> dict[str, list[tuple[str, int, str]]]:
+    """Every decision and ADR, keyed by ID: [(path, line, text the record owns)]. A decision
+    owns its definition line and the indented lines that continue it; an ADR owns its file."""
+    found: dict[str, list[tuple[str, int, str]]] = {}
+    for rel, text in scanned_markdown(root):
+        lines = text.split("\n")
+        if rel.startswith(ADR_DIR) and "/" not in rel.removeprefix(ADR_DIR):
+            first = next((ln for ln in lines if ln.strip()), "")
+            m = ADR_TITLE_RE.match(first.strip())
+            name = rel.removeprefix(ADR_DIR)
+            f = ADR_FILE_RE.match(name)
+            key = id_key("ADR", m.group(1)) if m else id_key("ADR", f.group(1)) if f else None
+            if key:
+                found.setdefault(key, []).append((rel, 1, text))
+            continue
+        for n, ln in enumerate(lines):
+            m = OD_DEF_RE.match(ln)
+            if not m:
+                continue
+            own = [ln]
+            for nxt in lines[n + 1 :]:
+                if not nxt.strip() or not nxt[0].isspace() or LIST_ITEM_RE.match(nxt):
+                    break
+                own.append(nxt)
+            found.setdefault(id_key("OD", m.group(1)), []).append((rel, n + 1, "\n".join(own)))
+    return found
+
+
+def supersede_failures(root: Path) -> list[str]:
+    """Supersede links that point at no record or lack the matching link back, and decision or
+    ADR IDs defined more than once. Placeholder IDs are matched as written, never as duplicates."""
+    defs = record_definitions(root)
+    out: list[str] = []
+    for key, places in sorted(defs.items()):
+        if len(places) > 1 and "NEW" not in key:
+            where = ", ".join(f"{rel}:{n}" for rel, n, _ in places)
+            out.append(f"{key} is defined {len(places)} times ({where}); keep one, link the rest")
+    for key, places in sorted(defs.items()):
+        rel, n, text = places[0]
+        for regex, back, word, back_word in (
+            (SUPERSEDED_BY_RE, SUPERSEDES_RE, "superseded by", "Supersedes"),
+            (SUPERSEDES_RE, SUPERSEDED_BY_RE, "supersedes", "superseded by"),
+        ):
+            for m in regex.finditer(text):
+                other = id_key(m.group(1), m.group(2))
+                if other == key:
+                    continue
+                if other not in defs:
+                    out.append(f"{rel}:{n}: {key} {word} {other}, which isn't defined")
+                    continue
+                if not any(
+                    id_key(b.group(1), b.group(2)) == key for b in back.finditer(defs[other][0][2])
+                ):
+                    o_rel, o_n, _ = defs[other][0]
+                    out.append(
+                        f"{rel}:{n}: {key} {word} {other}, but {other} ({o_rel}:{o_n}) doesn't"
+                        f' say "{back_word} {key}"'
+                    )
+    return out
+
+
+# Every new file under planning-docs/ carries an ID: a top-level plan, milestone or release plan
+# by its name and first line, anything else by the plan folder it sits in (planning add-on, IDs).
+PLAN_KINDS = {
+    "milestones": r"M\d+",
+    "releases": r"v\d+\.\d+\.\d+",
+    "": r"P(?:\d+|-NEW(?:-\d+)?)",
+}
+PLAN_EXAMPLES = {
+    "milestones": "milestones/M<n>-<slug>.md",
+    "releases": "releases/v<X.Y.Z>-<slug>.md",
+    "": "P<nnn>-<slug>.md",
+}
+PLAN_INDEX = PLAN_DIR + "README.md"
+
+
+def added_paths(root: Path, base: str) -> list[str]:
+    """Files added since the merge-base with `base`, untracked files included."""
+    mb = git(root, "merge-base", base, "HEAD", check=False)
+    since = mb.stdout.strip() if mb.returncode == 0 and mb.stdout.strip() else base
+    diff = git(root, "diff", "--name-only", "--no-renames", "--diff-filter=A", since)
+    extra = git(root, "ls-files", "--others", "--exclude-standard")
+    return sorted({p for p in (diff.stdout + extra.stdout).splitlines() if p.strip()})
+
+
+def plan_id_problem(root: Path, rel: str) -> str | None:
+    """Why a file under planning-docs/ has no usable ID, or None."""
+    if rel == PLAN_INDEX:
+        return None
+    parts = rel.removeprefix(PLAN_DIR).split("/")
+    kind = parts[0] if parts[0] in PLAN_KINDS and len(parts) > 1 and parts[0] else ""
+    rest = parts[1:] if kind else parts
+    pat = PLAN_KINDS[kind]
+    example = PLAN_EXAMPLES[kind]
+    if len(rest) == 1:
+        m = re.match(rf"({pat})-[^/]+\.md$", rest[0])
+        if not m:
+            return (
+                f"{rel}: no ID in the name (name it {example}, or put it in a folder named"
+                " after its plan's ID)"
+            )
+        plan_id, doc = m.group(1), rel
+    else:
+        m = re.match(rf"({pat})(?:-|$)", rest[0])
+        if not m:
+            return f"{rel}: the folder {rest[0]}/ doesn't start with a plan ID ({example})"
+        if rest[1:] != ["README.md"]:
+            return None
+        plan_id, doc = m.group(1), rel
+    text = (root / doc).read_text(errors="replace")
+    first = next((ln for ln in text.splitlines() if ln.strip()), "")
+    if not re.match(rf"{re.escape(plan_id)}(?![\w.-])", first.strip()):
+        return f"{doc}:1: the first line must start with its ID, {plan_id}"
+    return None
+
+
+def plan_id_failures(root: Path, base: str | None) -> list[str]:
+    """Files added under planning-docs/ without an ID. Existing files are never checked: the
+    planning add-on never renames or moves them."""
+    ref = resolve_base(root, base)
+    if ref is None:
+        return []
+    out = []
+    for rel in added_paths(root, ref):
+        if rel.startswith(PLAN_DIR) and (root / rel).is_file():
+            problem = plan_id_problem(root, rel)
+            if problem:
+                out.append(problem)
+    return out
+
+
 def people_section(text: str) -> str | None:
     """The '## People' section of AGENTS.md text (heading excluded), or None."""
     lines = text.splitlines()
@@ -778,12 +950,22 @@ def people_changed(root: Path, base: str | None, default: str | None) -> list[st
 def repo_checks(
     root: Path, base: str | None, branch: str | None, default: str | None
 ) -> tuple[list[str], list[str], list[str]]:
-    """(failures, warnings, info): setup files kept, placeholders, People changes (repos only)."""
+    """(failures, warnings, info): setup files kept, placeholders, supersede links, plan IDs,
+    People changes (repos only)."""
     if not is_git_repo(root):
         return [], [], []
     default = default_branch(root, default)
     fails, info = placeholder_failures(root, branch, default)
-    return [*setup_removals(root, base), *fails], people_changed(root, base, default), info
+    return (
+        [
+            *setup_removals(root, base),
+            *fails,
+            *supersede_failures(root),
+            *plan_id_failures(root, base),
+        ],
+        people_changed(root, base, default),
+        info,
+    )
 
 
 def show_people(root: Path, default: str | None) -> int:

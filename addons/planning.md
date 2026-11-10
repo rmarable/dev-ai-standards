@@ -23,6 +23,46 @@ are never renamed or moved.
 Slugs are lowercase kebab-case, at most 5 words, with no status, date, draft or version words. IDs
 are never reused.
 
+## IDs
+
+Every record has an ID, and every new file under `planning-docs/` carries one:
+
+| Record | ID | Where the ID is |
+|---|---|---|
+| Plan | `P<nnn>` (`P-NEW` on a branch) | file name `P<nnn>-<slug>.md`, and the start of its first line |
+| Milestone | `M<n>` | file name `milestones/M<n>-<slug>.md`, and the start of its first line |
+| Release plan | `v<X.Y.Z>` | file name `releases/v<X.Y.Z>-<slug>.md`, and the start of its first line |
+| Plan folder | the plan's ID | folder name `<ID>-<slug>/`; its `README.md` starts with the ID |
+| File in a plan folder | its plan's ID | the folder it sits in (`P012-cache/step-2.md` is P012's step 2) |
+| ADR | `ADR-<nnnn>` (`ADR-NEW` on a branch) | file name `docs/adr/<nnnn>-<slug>.md`, and its title `# ADR <nnnn>: ...` |
+| Decision | `OD-<n>` (`OD-NEW`, `OD-NEW-1` on a branch) | the start of its definition line, `- OD-<n>: ...` |
+| Codex task brief | the plan's ID | the start of its first line |
+
+`planning-docs/README.md`, the index, needs no ID. Decision and ADR numbers are each counted across
+the whole repository, so an ID names one record in any plan or milestone. A decision is defined
+once; when its text moves (for example from a milestone into the spec), the definition moves and
+is not copied. `rules_check` fails a new file under `planning-docs/` without an ID, and an ID
+defined twice. Files that already exist are never checked.
+
+## Retiring a decision
+
+A decision or ADR is never deleted or moved when it stops applying. It stays where it is, marked:
+
+- **Superseded.** A new record replaces it. The old record gets `(superseded by <new ID>, <date>)`
+  at the end of its definition line, and the new one says `Supersedes <old ID>`. For an ADR, the
+  old one's Status becomes `superseded by ADR-<nnnn>` and the new one says `Supersedes
+  ADR-<nnnn>`. Both links are required.
+- **Withdrawn.** It is dropped with no replacement. The record gets `(withdrawn, <date>: <reason>)`;
+  an ADR's Status becomes `withdrawn`.
+
+ADR Status is one of `proposed`, `accepted`, `superseded by ADR-<nnnn>` or `withdrawn`. Marking a
+record is the only edit allowed to an accepted ADR or to a finished milestone or plan; the
+release tag keeps the original text. A decision may be superseded by one in another milestone or
+an ADR. `rules_check` fails a supersede link whose other record doesn't exist or doesn't link back.
+It reads only definition lines and ADR files, so other text that mentions an ID never counts. On a
+branch, links may use placeholder IDs; the real numbers replace them in both places before the
+merge.
+
 Numbers (operator decision 2026-11-10): on a branch, everyone, people and Codex alike, writes
 placeholders: `ADR-NEW`, `OD-NEW`, `P-NEW` (several: `OD-NEW-1`, `OD-NEW-2`). A new ADR file is
 `docs/adr/NEW-<slug>.md` titled `# ADR-NEW: ...`; a new plan is `planning-docs/P-NEW-<slug>.md`
@@ -69,7 +109,7 @@ settled decisions, running processes. A fresh session reads it before anything e
 
 Each record has one owner; the others point to it.
 - Plan doc: owns status, steps, decisions in progress. Links its ADRs and spec sections by ID.
-- ADR or dated spec line: owns a decision. The plan's Decisions line and the commit name it.
+- ADR or decision line (`OD-<n>`): owns a decision. The plan's Decisions line and the commit name it.
 - `CHANGELOG.md`: one line per user-visible change, ending with the plan, ADR or decision ID.
 - State file: one pointer per task (plan path, log path, next action), never the content.
 - `state-archive/<task>/log.md`: resume card and step detail; links back to the plan.

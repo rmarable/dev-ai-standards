@@ -30,7 +30,10 @@ Each step is a short branch merged through the gate; unfinished behaviour stays 
 
 ## Decisions
 
-<Dated lines: "YYYY-MM-DD: <decision> (operator decision | ADR NNNN)".>
+<One line each: "- OD-NEW: <decision> (operator decision YYYY-MM-DD)", or "- OD-NEW: <decision>
+(ADR-NEW)". The real number replaces OD-NEW before the merge. A retired decision stays here,
+marked "(superseded by OD-<n>, YYYY-MM-DD)" or "(withdrawn, YYYY-MM-DD: <reason>)"; see the
+planning add-on.>
 
 ## Rejected
 

@@ -63,6 +63,15 @@ into the default branch, or a push to it, that still has a placeholder in an ADR
 an ADR title, a plan header or a decision definition line (`- OD-NEW: ...`). Other branches pass,
 and text that only mentions a placeholder doesn't count.
 
+Every record has an ID. Plans are `P<nnn>`, milestones `M<n>`, release plans `v<X.Y.Z>`, ADRs
+`ADR-<nnnn>` and decisions `OD-<n>`, and a file inside a plan's folder takes its plan's ID from the
+folder name. A decision that stops applying is never deleted. It stays in place and is marked
+"(superseded by OD-<n>, <date>)" or "(withdrawn, <date>: <reason>)", and the record that replaces
+it says "Supersedes OD-<n>". ADRs work the same way through their Status line. `rules_check` fails
+a new planning file without an ID, an ID defined twice, and a supersede link that is broken or
+one-way. The planning add-on (`docs/standards/addons/planning.md`, "IDs" and "Retiring a
+decision") has the full rules, and [checks/README.md](../checks/README.md) has the exact checks.
+
 ## `new-claude-project`
 
 ```sh

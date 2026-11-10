@@ -102,6 +102,20 @@ Run it as `rules_check.py [--base REF] [--manifest FILE] [--budget BYTES] [--bra
 - In a change to the default branch, a number placeholder (`ADR-NEW`, `OD-NEW`, `P-NEW`, or
   `OD-NEW-1` and so on) is left where a real number belongs. The message says "assign numbers
   before merging". The details follow this list.
+- A decision or ADR has a supersede link that is broken. The check reads each decision's
+  definition line (`- OD-12: ...`, with any indented lines that continue it) and each ADR file in
+  `docs/adr/`. A record that says "superseded by X" fails when X isn't defined, or when X doesn't
+  say "Supersedes" and the record's ID. A record that says "Supersedes X" fails the same way in
+  the other direction. IDs are written `OD-12`, `ADR-3`, `ADR-0003` or `ADR 0003`, and
+  placeholders like `OD-NEW-1` are matched as written. Text outside definition lines and ADR files
+  never counts.
+- A decision or ADR ID is defined more than once. Placeholder IDs are not counted here.
+- A file added under `planning-docs/` has no ID. A plan must be named `P<nnn>-<slug>.md`, a
+  milestone `milestones/M<n>-<slug>.md` and a release plan `releases/v<X.Y.Z>-<slug>.md`, and each
+  one's first line must start with that ID. Any other file must sit in a folder whose name starts
+  with its plan's ID, such as `P012-cache/step-2.md`; a `README.md` in that folder must also start
+  with the ID. `planning-docs/README.md`, the index, is exempt. Only files added since the
+  merge-base with the base branch are checked, so existing documents never fail.
 
 A change to the default branch is a pull request whose base is the default branch
 (`GITHUB_BASE_REF`), a push to it, or, on your machine, `--branch` or the current branch being it.
