@@ -14,8 +14,10 @@ import difflib
 import importlib.util
 import json
 import re
+import stat
 import sys
 from pathlib import Path
+from typing import Callable
 
 KIT = Path(__file__).resolve().parent.parent
 KIT_REPO = "rmarable/dev-ai-standards"
@@ -77,6 +79,15 @@ DOCS_ONLY_DEFAULT = (
     "# Read from the base branch only. Never list code, tests, prompts, eval data or any file a test reads.\n"
     "planning-docs/\n"
     "docs/adr/\n"
+)
+HOOKS_DIR = ".githooks"
+TRAILER_CHECK = "docs/standards/checks/trailer_check.py"
+HOOK_LINE = f'python3 {TRAILER_CHECK} --message-file "$1" || exit 1'
+HOOK_SCRIPT = (
+    "#!/bin/sh\n"
+    "# dev-ai-standards: exactly one allowed co-author trailer (docs/standards/checks/README.md).\n"
+    "# Git runs hooks from the top of the work tree. A reminder, not a boundary (--no-verify skips it).\n"
+    f'exec python3 {TRAILER_CHECK} --message-file "$1"\n'
 )
 IF_RE = re.compile(r"<!-- if ([a-z-]+) -->")
 ENDIF = "<!-- endif -->"
@@ -250,6 +261,7 @@ class Plan:
         self.writes: list[tuple[str, bytes, str]] = []
         self.removes: list[str] = []
         self.notes: list[str] = []
+        self.actions: list[tuple[str, Callable[[], None]]] = []
 
     def write(self, rel: str, data: bytes, why: str) -> None:
         p = self.root / rel
@@ -267,6 +279,8 @@ class Plan:
             print(f"{verb}write {rel} ({why})")
         for rel in self.removes:
             print(f"{verb}remove {rel} (kit file no longer selected)")
+        for what, _ in self.actions:
+            print(f"{verb}{what}")
         for n in self.notes:
             print(f"note: {n}")
 
@@ -277,6 +291,8 @@ class Plan:
             p.write_bytes(data)
         for rel in self.removes:
             (self.root / rel).unlink(missing_ok=True)
+        for _, act in self.actions:
+            act()
 
 
 def add_lines(existing: str, lines: list[str]) -> str | None:
@@ -320,6 +336,59 @@ def merge_settings(plan: Plan) -> None:
         changed.append(f"{len(added)} permissions.ask pattern(s)")
     if changed:
         plan.write(".claude/settings.json", (json.dumps(settings, indent=2) + "\n").encode(), ", ".join(changed))
+
+
+def plan_hook(plan: Plan) -> None:
+    """Install the commit-msg hook in a fresh repo; otherwise touch nothing and print the line to add.
+
+    Installs only when git has no core.hooksPath, there is no .githooks/ folder, and the default
+    hooks folder holds no hook of its own (setting core.hooksPath would silently switch those off).
+    """
+    root = plan.root
+    if not rc.is_git_repo(root):
+        plan.notes.append("hook: not a git repository; commit-msg hook not installed (run apply again after 'git init')")
+        return
+    top = rc.git(root, "rev-parse", "--show-toplevel", check=False).stdout.strip()
+    if not top or Path(top).resolve() != root:
+        plan.notes.append(f"hook: {root} is not the top of its git work tree; commit-msg hook not installed")
+        return
+    hooks_path = rc.git(root, "config", "--get", "core.hooksPath", check=False).stdout.strip()
+    githooks = root / HOOKS_DIR
+    if hooks_path == HOOKS_DIR and (githooks / "commit-msg").is_file():
+        if (githooks / "commit-msg").read_text() == HOOK_SCRIPT:
+            print("hook: commit-msg already installed (.githooks/commit-msg, core.hooksPath .githooks)")
+            return
+    default_dir = rc.git(root, "rev-parse", "--git-path", "hooks", check=False).stdout.strip()
+    default_hooks = root / default_dir if default_dir else None
+    own_default = sorted(
+        p.name
+        for p in (default_hooks.iterdir() if default_hooks and default_hooks.is_dir() else [])
+        if p.is_file() and not p.name.endswith(".sample")
+    )
+    if hooks_path or githooks.exists() or own_default:
+        if hooks_path:
+            where = f"core.hooksPath is '{hooks_path}'"
+            target = f"{hooks_path.rstrip('/')}/commit-msg"
+        elif githooks.exists():
+            where = f"{HOOKS_DIR}/ exists"
+            target = f"{HOOKS_DIR}/commit-msg"
+        else:
+            where = f"{default_dir}/ has hooks ({', '.join(own_default)})"
+            target = f"{default_dir}/commit-msg"
+        print(f"hook: existing hooks ({where}); nothing changed. Add this line to {target}:")
+        print(f"  {HOOK_LINE}")
+        return
+
+    def install() -> None:
+        hook = githooks / "commit-msg"
+        githooks.mkdir(parents=True, exist_ok=True)
+        hook.write_text(HOOK_SCRIPT)
+        hook.chmod(hook.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        rc.git(root, "config", "core.hooksPath", HOOKS_DIR)
+
+    plan.actions.append(
+        (f"install {HOOKS_DIR}/commit-msg (runs {TRAILER_CHECK}) and set core.hooksPath {HOOKS_DIR}", install)
+    )
 
 
 def cmd_apply(args: argparse.Namespace) -> int:
@@ -447,6 +516,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
                 plan.write(".git/info/attributes", new.encode(), "kit lines added, local")
 
     merge_settings(plan)
+    plan_hook(plan)
     plan.write(rc.MANIFEST_PATH, rc.format_manifest(manifest).encode(), "manifest")
     plan.show(args.dry_run)
     if args.dry_run:
@@ -460,8 +530,10 @@ def cmd_apply(args: argparse.Namespace) -> int:
 def cmd_drift(args: argparse.Namespace) -> int:
     root = Path(args.dir).resolve()
     manifest, source = rc.load_manifest(root, args.base)
-    findings = rc.drift_findings(root, manifest)
+    findings, notes = rc.kit_findings(root, manifest, source, args.base)
     print(f"drift: manifest from {source}")
+    for n in notes:
+        print(f"drift: {n}")
     agents = root / "AGENTS.md"
     if agents.is_file():
         found, problems = rc.overrides(agents.read_text())
@@ -532,7 +604,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="dev-ai-standards", description="Apply the dev-ai-standards kit, check drift, or promote a change."
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
-    a = sub.add_parser("apply", help="copy the kit into a project; never overwrites project-owned text")
+    a = sub.add_parser("apply", help="copy the kit into a project (and, in a repo with no hooks yet, install the commit-msg hook); never overwrites project-owned text")
     a.add_argument("dir", nargs="?", default=".", help="project dir (default .)")
     a.add_argument("--high-stakes", action="store_true", help="add the high-stakes add-on")
     a.add_argument("--stack", choices=STACKS, default="other", help="stack (default other)")

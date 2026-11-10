@@ -58,26 +58,41 @@ web-flow exemption applies.
 
 ## `rules_check.py`
 
-Run as `rules_check.py [--base REF | --manifest FILE] [--budget BYTES] [<dir>]`. Fails when:
+Run as `rules_check.py [--base REF] [--manifest FILE] [--budget BYTES] [<dir>]`. Fails when:
 - `CLAUDE.md` has no line that is exactly `@AGENTS.md`;
 - `AGENTS.md` is over the size budget (default 24 KiB, well under Codex's 32 KiB combined chain;
   one number per project, set with `--budget` in the workflow);
 - a backticked path in the `Read` column of a read-before table doesn't exist (skill names and
   URLs are skipped);
 - a kit file or a kit block in `AGENTS.md` or `CLAUDE.md` differs from the trusted manifest, is
-  missing, or isn't listed (including any file under `docs/standards/` the manifest doesn't name);
+  missing, or isn't listed (including any file under `docs/standards/` the manifest doesn't name),
+  unless the branch is a kit upgrade (below);
 - `## Overrides` appears more than once, or a line in it isn't `- <block name>: <text>` with a
   known block name.
 
 It always prints the overrides it found. The trusted manifest is `--manifest FILE` (CI: the base
 branch's copy), else `--base REF`, else `origin/main`, then `main`. Only when no base branch exists,
 or the base has no manifest yet (first adoption), does it read the working copy, and it says so.
-A branch's edit to its own manifest therefore changes nothing.
+A branch's edit to its own manifest therefore changes nothing, except in a kit upgrade.
 
-**Kit updates:** a branch that re-runs `apply` for a new kit version changes kit text and the
-manifest together, so `rules_check` fails on that branch until it merges (the base manifest still
-holds the old hashes). Merging such a PR needs the operator's decision each time; unresolved, see
-the kit's open questions.
+**Kit upgrades** (operator decision 2026-11-10): a branch that re-runs `apply` for a new kit version
+changes kit text and the manifest together. `rules_check` then checks against the branch's own
+manifest instead of the base's only when all of these hold:
+- every changed path is a kit file (`docs/standards/**`, or another path the base or branch
+  manifest lists, such as `.claude/rules/state-file.md`), the manifest, `AGENTS.md` or `CLAUDE.md`;
+  in those two, only text inside kit blocks and the `Standards:` line changed;
+- the `Standards:` line names a strictly newer version (semantic-version order) than the base's;
+- the branch's kit files and blocks match the branch's manifest.
+
+Changed paths are those between the merge-base with the base ref (`--base`, else `origin/main`,
+then `main`) and the working tree, untracked files included; CI passes `--base` with the PR's base.
+Any branch whose manifest or version differs from the base's and misses a condition fails with the
+reason (for example "kit upgrade PRs may change only kit files, the manifest and the Standards line
+(also changed: ...)") plus the usual findings against the base manifest. So the rest of what
+`apply` writes on an upgrade (`.gitignore` lines, `.claude/settings.json`, the commit-msg hook)
+goes in its own PR, as does the changelog line. `dev-ai-standards drift` applies the same rule. The
+check can't tell a real kit release from hand-edited kit text with a bumped version: the PR review
+compares the kit diff with the kit's `CHANGELOG.md`.
 
 Manifest format, written only by `apply`: one line per kit file or block,
 `<sha256 hex>  <path>` or `<sha256 hex>  <AGENTS.md|CLAUDE.md>#<block>`. A block's hash covers the
@@ -100,12 +115,27 @@ top-level `- ` lines under each `## ` heading. It never fails.
 Hooks are reminders, not boundaries: `--no-verify` and a branch's own edits skip them; CI is the
 check that reports.
 
-**commit-msg** (git): in `.githooks/commit-msg`, with `git config core.hooksPath .githooks`:
+**commit-msg** (git): `apply` installs it only in a repo with no hooks yet: `git config --get
+core.hooksPath` is empty, there is no `.githooks/` folder, and the default hooks folder
+(`.git/hooks`) holds nothing but `*.sample` files (setting `core.hooksPath` would switch those
+hooks off). Then it writes `.githooks/commit-msg`, makes it executable and runs
+`git config core.hooksPath .githooks`:
 
 ```sh
 #!/bin/sh
 exec python3 docs/standards/checks/trailer_check.py --message-file "$1"
 ```
+
+Otherwise it changes nothing and prints the line to add to the existing `commit-msg` hook (in the
+folder it names):
+
+```sh
+python3 docs/standards/checks/trailer_check.py --message-file "$1" || exit 1
+```
+
+`--dry-run` prints which case applies. Outside a git repo, or below the top of a work tree, it
+installs nothing and says so. `core.hooksPath` is local git config: each clone sets it again
+(re-run `apply`, or `git config core.hooksPath .githooks`).
 
 **Claude Code** (project `.claude/settings.json`): the path filter goes in `if`, since `matcher`
 tests only the tool name (A0 row 12).

@@ -47,6 +47,7 @@ jobs:
           git archive "$base" -- docs/standards/checks docs/standards/manifest | tar -x -C "$dest" \
             || { echo "rules-check: base $base has no docs/standards/checks or manifest"; exit 1; }
           echo "BASE_STANDARDS=$dest/docs/standards" >> "$GITHUB_ENV"
+          echo "BASE_REF=$base" >> "$GITHUB_ENV"
 
       - name: trailer_check (pushed commits only)
         env:
@@ -72,6 +73,8 @@ jobs:
           fi
 
       - name: rules_check
+        # --base: what a kit upgrade PR is compared with (checks/README.md, "Kit upgrades").
         run: |
           set -eu
-          python "$BASE_STANDARDS/checks/rules_check.py" --manifest "$BASE_STANDARDS/manifest" .
+          python "$BASE_STANDARDS/checks/rules_check.py" --manifest "$BASE_STANDARDS/manifest" \
+            --base "$BASE_REF" .

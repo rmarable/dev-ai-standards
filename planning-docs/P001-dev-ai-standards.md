@@ -93,7 +93,9 @@ docs/adr/, VERSION, CHANGELOG.md
 - To change a kit rule, a project adds a line naming the block to the one `## Overrides` section
   of `AGENTS.md` (the override wins; `rules_check` lists it) or uses `promote`; never edits a block.
 - Only `apply` writes the hash manifest `docs/standards/manifest`; `drift` and `rules_check` hash
-  kit files and blocks against `main`'s copy.
+  kit files and blocks against `main`'s copy, except in a kit upgrade PR (only kit files, the
+  manifest and a newer Standards line change), which is checked against its own manifest (operator
+  decision 2026-11-10; `checks/README.md`).
 
 **What `core.md` holds.** Exactly the four sections marked "(core)" below: Core, Enforcement,
 Scoped approval, Model use. The cap is `wc -w core.md` <= 600 (Markdown included); kit CI runs it.

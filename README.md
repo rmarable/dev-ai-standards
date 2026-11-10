@@ -60,7 +60,10 @@ bin/dev-ai-standards apply [--high-stakes] [--stack python|iac|other] [--codex] 
 
 `apply` copies the kit files, writes the kit blocks, `docs/standards/manifest` and
 `.claude/settings.json` (with the `permissions.ask` list), and sets the `Standards:` line under the
-title of `AGENTS.md`. Review the diff, then commit it like any other change.
+title of `AGENTS.md`. In a git repo with no hooks yet it also installs `.githooks/commit-msg`
+(runs `trailer_check`) and sets `core.hooksPath`; with existing hooks it changes nothing and prints
+the line to add (`checks/README.md`, "Hook mechanics"). Review the diff, then commit it like any
+other change.
 
 ## Update flow
 
@@ -69,8 +72,10 @@ title of `AGENTS.md`. Review the diff, then commit it like any other change.
    resolve each (move it to `## Overrides`, or `promote` it) before going on.
 3. Re-run `apply` with the same choices as the `Standards:` line. It rewrites kit files, blocks,
    the manifest and the version.
-4. Review the diff, run the project's checks, commit (one changelog line), and merge as the project
-   merges.
+4. Review the diff, run the project's checks, commit, and merge as the project merges. The upgrade
+   PR may change only kit files, the manifest and the `Standards:` line, which must name a newer
+   version; the changelog line and anything else `apply` wrote (`.gitignore`, settings, hook) go in
+   a separate PR (`checks/README.md`, "Kit upgrades").
 5. Start fresh agent sessions so the new rules load.
 
 To change a kit rule for every project: `bin/dev-ai-standards promote <kit path>` prints the `gh`
