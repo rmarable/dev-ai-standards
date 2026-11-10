@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""scripts/check: runs exactly what the kit's CI runs.
+
+Implements P001 Part A core ("`scripts/check [--full]` runs exactly what CI runs") and the kit
+CI cap on `core.md` (`wc -w core.md` <= 600). For the kit, --full runs the same steps.
+"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+CORE_CAP = 600
+SCRIPTS = (
+    "bin/dev-ai-standards",
+    "bin/gate-status",
+    "bin/new-claude-project",
+    "checks/trailer_check.py",
+    "checks/rules_check.py",
+    "checks/state_check.py",
+    "scripts/check",
+)
+
+
+def step(name: str, ok: bool, detail: str = "") -> bool:
+    print(f"check: {'ok  ' if ok else 'FAIL'} {name}{': ' + detail if detail else ''}")
+    return ok
+
+
+def core_words() -> bool:
+    core = ROOT / "core.md"
+    if not core.is_file():
+        return step("core.md word cap", False, "core.md missing")
+    r = subprocess.run(["wc", "-w"], stdin=core.open("rb"), capture_output=True, text=True)
+    words = int(r.stdout.split()[0])
+    return step("core.md word cap", words <= CORE_CAP, f"{words} of {CORE_CAP} words (wc -w)")
+
+
+def compile_scripts() -> bool:
+    ok = True
+    for rel in SCRIPTS:
+        p = ROOT / rel
+        if not p.is_file():
+            ok = step(f"compile {rel}", False, "missing") and ok
+            continue
+        src = p.read_text()
+        if "python" not in (src.splitlines() or [""])[0]:
+            r = subprocess.run(["sh", "-n", str(p)], capture_output=True, text=True)
+            if r.returncode != 0:
+                ok = step(f"sh -n {rel}", False, r.stderr.strip()[:200]) and ok
+            continue
+        try:
+            compile(src, str(p), "exec")
+        except SyntaxError as e:
+            ok = step(f"compile {rel}", False, f"line {e.lineno}: {e.msg}") and ok
+    return step("scripts compile", ok) if ok else False
+
+
+def unit_tests() -> bool:
+    r = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(ROOT / "tests")])
+    return step("unit tests", r.returncode == 0)
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="Run the kit's CI checks: core.md word cap, script compile, unit tests.")
+    ap.add_argument("--full", action="store_true", help="same steps (the kit has no slower tier)")
+    ap.parse_args(argv)
+    results = [core_words(), compile_scripts(), unit_tests()]
+    if not all(results):
+        print("check: failed", file=sys.stderr)
+        return 1
+    print("check: all passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

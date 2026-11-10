@@ -1,0 +1,449 @@
+#!/usr/bin/env python3
+"""new-claude-project: start a new project on the dev-ai-standards kit with one command.
+
+Implements P001 Part A, "One-command launch" (operator amendment 2026-11-10) and its
+"Who may run what" (decision 2026-11-10): Claude may run --dry-run and --local only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+OWNER = os.environ.get("NEW_CLAUDE_PROJECT_OWNER", "rmarable")
+SRC_ROOT = Path(os.environ.get("NEW_CLAUDE_PROJECT_ROOT", str(Path.home() / "src")))
+# The operator's GitHub plan (2026-11-10: Free). On Free, private repos get no ruleset.
+GH_PLAN = os.environ.get("NEW_CLAUDE_PROJECT_GH_PLAN", "free").lower()
+
+SUBJECT = "new-claude-project: initial commit"
+TRAILER = "Co-Authored-By: Claude <noreply@anthropic.com>"
+RULES_CHECK_CONTEXT = "rules-check"
+GATE_CONTEXT = "local-gate"
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
+
+# Patterns for the --public secret scan. Only the file and line are printed, never the match.
+SECRET_PATTERNS = [
+    ("AWS access key id", re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("GitHub token", re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})")),
+    ("Slack token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}")),
+    ("Anthropic API key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}")),
+    ("OpenAI-style API key", re.compile(r"\bsk-(proj-)?[A-Za-z0-9]{32,}")),
+]
+
+
+class Stop(Exception):
+    """A step failed or was declined; the message is the one-line reason."""
+
+
+class Run:
+    """What this run has made so far, for the failure report. Nothing is ever deleted."""
+
+    def __init__(self) -> None:
+        self.made: list[str] = []
+
+    def note(self, what: str) -> None:
+        self.made.append(what)
+
+    def report(self) -> None:
+        if self.made:
+            print("Already exists (left in place, nothing deleted):", file=sys.stderr)
+            for item in self.made:
+                print(f"  - {item}", file=sys.stderr)
+        else:
+            print("Nothing was created.", file=sys.stderr)
+
+
+def sh(cmd: list[str], cwd: Path | None = None, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, cwd=cwd, input=input_text, text=True, capture_output=True)
+
+
+def first_line(text: str) -> str:
+    for line in text.splitlines():
+        if line.strip():
+            return line.strip()
+    return "no output"
+
+
+def run_by_claude() -> bool:
+    """True when no human can answer: no TTY on stdin or stdout, or CLAUDECODE is set."""
+    if os.environ.get("CLAUDECODE"):
+        return True
+    return not (sys.stdin.isatty() and sys.stdout.isatty())
+
+
+def ask(prompt: str, default: str) -> str:
+    """Read one answer; EOF gives the default."""
+    try:
+        answer = input(prompt)
+    except EOFError:
+        print()
+        return default
+    return answer.strip() or default
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        prog="new-claude-project",
+        description=(
+            "Create ~/src/<name> on the dev-ai-standards kit, then (after one y/N) a GitHub repo "
+            f"{OWNER}/<name>, and open Claude. When run by Claude (no TTY, or CLAUDECODE set) only "
+            "--dry-run and --local are allowed."
+        ),
+    )
+    p.add_argument("name", help="project name: lowercase letters, digits, '.', '_', '-'")
+    p.add_argument("--high-stakes", action="store_true", help="add the high-stakes add-on (tier)")
+    p.add_argument("--stack", choices=["python", "iac", "other"], help="stack add-on (default other)")
+    p.add_argument("--codex", action="store_true", help="add the Codex add-on; prints the first Codex worktree command")
+    p.add_argument("--public", action="store_true", help="public repo: secret scan first, then type the name back")
+    p.add_argument("--local", action="store_true", help="no GitHub: build and commit locally only")
+    p.add_argument("--no-pr", action="store_true", help="solo throwaway: local merges, ruleset blocks force push and deletion only")
+    p.add_argument("--no-launch", action="store_true", help="print next steps instead of opening Claude")
+    p.add_argument("--dry-run", action="store_true", help="print what would happen; change nothing")
+    args = p.parse_args(argv)
+    if not NAME_RE.match(args.name) or args.name in {".", ".."} or args.name.endswith(".git"):
+        p.error(f"bad name {args.name!r}: use lowercase letters, digits, '.', '_', '-' (at most 100)")
+    if args.public and args.local:
+        p.error("--public and --local conflict: --local makes no GitHub repo")
+    return args
+
+
+def kit_paths() -> tuple[Path, Path]:
+    """The kit root (from this script's real location) and the apply script."""
+    kit = Path(os.path.realpath(__file__)).parent.parent
+    override = os.environ.get("DEV_AI_STANDARDS_BIN")
+    apply_bin = Path(override) if override else kit / "bin" / "dev-ai-standards"
+    return kit, apply_bin
+
+
+def preflight(args: argparse.Namespace, target: Path, kit: Path, apply_bin: Path) -> None:
+    if not (apply_bin.is_file() and os.access(apply_bin, os.X_OK)):
+        raise Stop(f"{apply_bin} is missing or not executable")
+    for key in ("user.name", "user.email"):
+        if not sh(["git", "config", "--get", key]).stdout.strip():
+            raise Stop(f"git {key} is not set (git config --global {key} ...)")
+    if os.path.lexists(target):
+        raise Stop(f"{target} already exists")
+
+    inside = sh(["git", "-C", str(kit), "rev-parse", "--is-inside-work-tree"]).returncode == 0
+    upstream = inside and sh(["git", "-C", str(kit), "rev-parse", "--abbrev-ref", "@{u}"]).returncode == 0
+    if upstream:
+        if args.dry_run:
+            print(f"Would update the kit: git -C {kit} pull --ff-only")
+        else:
+            pull = sh(["git", "-C", str(kit), "pull", "--ff-only"])
+            if pull.returncode != 0:
+                raise Stop(f"kit update failed (git pull --ff-only): {first_line(pull.stderr)}")
+    elif not args.local:
+        raise Stop(f"the kit at {kit} has no upstream, so it can't be checked up to date (use --local)")
+    version_file = kit / "VERSION"
+    version = version_file.read_text().strip() if version_file.is_file() else "unknown"
+    commit = sh(["git", "-C", str(kit), "rev-parse", "--short", "HEAD"]).stdout.strip() if inside else ""
+    print(f"Kit: dev-ai-standards v{version} at {kit} (commit {commit or 'unknown: not a git checkout'})")
+    if not upstream:
+        print("Kit update skipped (no upstream; --local).")
+
+    if args.local:
+        print("GitHub checks skipped (--local).")
+        return
+    auth = sh(["gh", "auth", "status"])
+    if auth.returncode != 0:
+        raise Stop("gh is not logged in (gh auth status failed)")
+    view = sh(["gh", "repo", "view", f"{OWNER}/{args.name}", "--json", "name"])
+    if view.returncode == 0:
+        raise Stop(f"{OWNER}/{args.name} already exists on GitHub")
+    if "Could not resolve to a Repository" not in view.stderr:
+        raise Stop(f"can't check whether {OWNER}/{args.name} is free: {first_line(view.stderr)}")
+
+
+def choose(args: argparse.Namespace, interactive: bool) -> None:
+    """Ask for each choice the flags didn't give; without a human, use the defaults."""
+    if not args.high_stakes:
+        if interactive:
+            tier = ask("Tier [core/high-stakes] (core): ", "core").lower()
+            if tier not in {"core", "high-stakes"}:
+                raise Stop(f"unknown tier {tier!r}")
+            args.high_stakes = tier == "high-stakes"
+    if args.stack is None:
+        stack = ask("Stack [python/iac/other] (other): ", "other").lower() if interactive else "other"
+        if stack not in {"python", "iac", "other"}:
+            raise Stop(f"unknown stack {stack!r}")
+        args.stack = stack
+    if not args.codex and interactive:
+        args.codex = ask("Codex add-on [y/N]: ", "n").lower() in {"y", "yes"}
+    tier = "high-stakes" if args.high_stakes else "core"
+    print(f"Choices: tier {tier}, stack {args.stack}, Codex {'yes' if args.codex else 'no'}"
+          f"{', no-pr' if args.no_pr else ''}.")
+
+
+def apply_cmd(args: argparse.Namespace, apply_bin: Path, target: Path) -> list[str]:
+    cmd = [str(apply_bin), "apply"]
+    if args.high_stakes:
+        cmd.append("--high-stakes")
+    cmd += ["--stack", args.stack]
+    if args.codex:
+        cmd.append("--codex")
+    if args.no_pr:
+        cmd.append("--no-pr")
+    return cmd + [str(target)]
+
+
+def milestone_path(name: str) -> str:
+    return f"planning-docs/milestones/M1-{name}.md"
+
+
+def m1_stub(args: argparse.Namespace) -> str:
+    today = datetime.date.today().isoformat()
+    tier = "high-stakes" if args.high_stakes else "core"
+    return (
+        f"M1 · Status: draft · Owner: operator · Created: {today} · Updated: {today} · "
+        f"Milestone: M1 · Tier: {tier}\n\n"
+        f"# M1: {args.name}\n\n"
+        "## Goal\n\nTo be planned with the operator in the first Claude session.\n\n"
+        "## Scope\n\n## Steps\n\n"
+        "## Decisions\n\n## Rejected\n\n## Open questions\n\n"
+        f"## Draft history\n\n- {today}: stub written by new-claude-project.\n"
+    )
+
+
+def build(args: argparse.Namespace, target: Path, apply_bin: Path, run: Run) -> list[str]:
+    try:
+        target.mkdir(parents=True)
+    except OSError as e:
+        raise Stop(f"can't create {target}: {e.strerror}") from None
+    run.note(f"folder {target}")
+    init = sh(["git", "init", "-b", "main"], cwd=target)
+    if init.returncode != 0:
+        raise Stop(f"git init failed: {first_line(init.stderr)}")
+    run.note(f"git repo in {target} (branch main, no commits yet)")
+    applied = sh(apply_cmd(args, apply_bin, target), cwd=target)
+    sys.stdout.write(applied.stdout)
+    if applied.returncode != 0:
+        run.note(f"whatever dev-ai-standards apply wrote in {target}")
+        raise Stop(f"dev-ai-standards apply failed: {first_line(applied.stderr or applied.stdout)}")
+    run.note(f"kit files from dev-ai-standards apply in {target}")
+    stub = target / milestone_path(args.name)
+    if stub.exists():
+        print(f"Kept {milestone_path(args.name)} as apply wrote it.")
+    else:
+        stub.parent.mkdir(parents=True, exist_ok=True)
+        stub.write_text(m1_stub(args))
+        run.note(f"M1 stub {stub}")
+    listing = sh(["git", "ls-files", "--others", "--exclude-standard"], cwd=target)
+    if listing.returncode != 0:
+        raise Stop(f"git ls-files failed: {first_line(listing.stderr)}")
+    return sorted(listing.stdout.splitlines())
+
+
+def secret_scan(target: Path, files: list[str]) -> list[str]:
+    hits: list[str] = []
+    for rel in files:
+        path = target / rel
+        try:
+            data = path.read_bytes()
+        except OSError:
+            continue
+        if b"\0" in data[:8192]:
+            continue
+        for lineno, line in enumerate(data.decode("utf-8", "replace").splitlines(), 1):
+            for kind, pattern in SECRET_PATTERNS:
+                if pattern.search(line):
+                    hits.append(f"{rel}:{lineno} ({kind})")
+    return hits
+
+
+def commit(target: Path, run: Run) -> None:
+    add = sh(["git", "add", "-A"], cwd=target)
+    if add.returncode != 0:
+        raise Stop(f"git add failed: {first_line(add.stderr)}")
+    done = sh(["git", "commit", "-q", "-m", f"{SUBJECT}\n\n{TRAILER}"], cwd=target)
+    if done.returncode != 0:
+        raise Stop(f"first commit failed: {first_line(done.stderr or done.stdout)}")
+    head = sh(["git", "rev-parse", "--short", "HEAD"], cwd=target).stdout.strip()
+    run.note(f"first commit {head} on main ({SUBJECT})")
+    print(f"Committed {head}: {SUBJECT}")
+
+
+def ruleset_wanted(args: argparse.Namespace) -> tuple[bool, str]:
+    if args.public:
+        return True, "public repo"
+    if GH_PLAN == "free":
+        return False, ("GitHub Free: private repos can't take a ruleset (believed, not verified; "
+                       "A4 tries it once). Protection is CI plus the reminders.")
+    return True, f"GitHub plan {GH_PLAN}"
+
+
+def rulesets(args: argparse.Namespace) -> list[dict[str, object]]:
+    """The default PR ruleset, or under --no-pr force push and deletion only (P001 Enforcement)."""
+    main_rules: list[dict[str, object]] = [{"type": "deletion"}, {"type": "non_fast_forward"}]
+    if not args.no_pr:
+        contexts = [{"context": RULES_CHECK_CONTEXT}]
+        if args.high_stakes:
+            contexts.append({"context": GATE_CONTEXT})
+        main_rules += [
+            {"type": "pull_request", "parameters": {
+                "required_approving_review_count": 0,
+                "dismiss_stale_reviews_on_push": False,
+                "require_code_owner_review": False,
+                "require_last_push_approval": False,
+                "required_review_thread_resolution": False,
+                "allowed_merge_methods": ["merge"],
+            }},
+            {"type": "required_status_checks", "parameters": {
+                "strict_required_status_checks_policy": bool(args.high_stakes),
+                "required_status_checks": contexts,
+            }},
+        ]
+    return [
+        {"name": "main", "target": "branch", "enforcement": "active", "bypass_actors": [],
+         "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
+         "rules": main_rules},
+        {"name": "release tags", "target": "tag", "enforcement": "active", "bypass_actors": [],
+         "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
+         "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}]},
+    ]
+
+
+def remote_actions(args: argparse.Namespace) -> list[str]:
+    vis = "--public" if args.public else "--private"
+    acts = [f"git commit (subject '{SUBJECT}')",
+            f"gh repo create {OWNER}/{args.name} {vis} --source . --push"]
+    wanted, why = ruleset_wanted(args)
+    kind = "force push and deletion only (--no-pr)" if args.no_pr else "default PR ruleset"
+    acts.append(f"ruleset on main and v* tags: {kind}" if wanted else f"no ruleset: {why}")
+    return acts
+
+
+def go_remote(args: argparse.Namespace, target: Path, run: Run) -> None:
+    repo = f"{OWNER}/{args.name}"
+    vis = "--public" if args.public else "--private"
+    created = sh(["gh", "repo", "create", repo, vis, "--source", ".", "--push"], cwd=target)
+    if created.returncode != 0:
+        if sh(["gh", "repo", "view", repo, "--json", "name"]).returncode == 0:
+            run.note(f"GitHub repo {repo} ({vis[2:]}; push may not have finished)")
+        raise Stop(f"gh repo create failed: {first_line(created.stderr)}")
+    run.note(f"GitHub repo {repo} ({vis[2:]}), main pushed")
+    print(f"Created {repo} ({vis[2:]}) and pushed main.")
+    wanted, why = ruleset_wanted(args)
+    if not wanted:
+        print(f"Ruleset skipped: {why}")
+        return
+    for body in rulesets(args):
+        made = sh(["gh", "api", "--method", "POST", f"repos/{repo}/rulesets", "--input", "-"],
+                  input_text=json.dumps(body))
+        if made.returncode != 0:
+            raise Stop(f"ruleset '{body['name']}' failed: {first_line(made.stderr)}")
+        run.note(f"ruleset '{body['name']}' on {repo}")
+        print(f"Ruleset '{body['name']}' set ({why}).")
+
+
+def first_prompt(name: str) -> str:
+    return (f"Read AGENTS.md, then plan milestone M1 with me in {milestone_path(name)}. "
+            "Confirm before writing files, committing or pushing.")
+
+
+def codex_hint(args: argparse.Namespace, target: Path) -> None:
+    base = "main" if args.local else "origin/main"
+    print("First Codex worktree (run it yourself; Codex is not started):")
+    print(f"  git -C {target} worktree add -b codex/<topic> ../{args.name}-codex-<topic> {base}")
+
+
+def next_steps(args: argparse.Namespace, target: Path) -> None:
+    print("Next steps:")
+    print(f"  cd {target}")
+    print(f"  claude {json.dumps(first_prompt(args.name))}")
+
+
+def dry_run(args: argparse.Namespace, target: Path, apply_bin: Path) -> None:
+    print("Dry run: nothing is changed.")
+    print(f"Would create {target} and run: git init -b main")
+    print("Would run: " + " ".join(apply_cmd(args, apply_bin, target)))
+    print(f"Would write {milestone_path(args.name)} (unless apply wrote it)")
+    if args.local:
+        print(f"Would commit locally (subject '{SUBJECT}'); no remote actions (--local).")
+    else:
+        if args.public:
+            print("Would scan the files for secrets, then ask for the name typed back.")
+        print("Would ask one y/N (EOF is No) covering:")
+        for act in remote_actions(args):
+            print(f"  - {act}")
+    if args.codex:
+        codex_hint(args, target)
+    if args.no_launch:
+        print("Would print next steps (--no-launch).")
+    else:
+        print(f"Would open Claude in {target} with: {first_prompt(args.name)}")
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+    by_claude = run_by_claude()
+    if by_claude and not (args.dry_run or args.local):
+        print("new-claude-project: refused: the remote steps (repo create, push, ruleset) need an "
+              "interactive human (TTYs and CLAUDECODE unset); Claude may run --dry-run or --local.",
+              file=sys.stderr)
+        return 2
+    target = SRC_ROOT / args.name
+    kit, apply_bin = kit_paths()
+    run = Run()
+    try:
+        preflight(args, target, kit, apply_bin)
+        choose(args, interactive=not by_claude)
+        if args.dry_run:
+            dry_run(args, target, apply_bin)
+            return 0
+        files = build(args, target, apply_bin, run)
+        if args.local:
+            commit(target, run)
+            print(f"Built {target} locally ({len(files)} files); no remote actions (--local).")
+        else:
+            if args.public:
+                hits = secret_scan(target, files)
+                if hits:
+                    for hit in hits:
+                        print(f"  possible secret: {hit}", file=sys.stderr)
+                    raise Stop(f"secret scan found {len(hits)} possible secret(s); not publishing")
+                print("Secret scan: clean.")
+            print(f"Files ({len(files)}):")
+            for rel in files:
+                print(f"  {rel}")
+            print("Remote actions:")
+            for act in remote_actions(args):
+                print(f"  - {act}")
+            if args.public and ask(f"Public repo: type the name ({args.name}) to confirm: ", "") != args.name:
+                raise Stop("name not typed back; nothing published")
+            if ask("Go ahead with these actions? [y/N]: ", "n").lower() not in {"y", "yes"}:
+                raise Stop("not confirmed; no commit and no remote actions")
+            commit(target, run)
+            go_remote(args, target, run)
+        if args.codex:
+            codex_hint(args, target)
+        if args.no_launch or by_claude:
+            if by_claude and not args.no_launch:
+                print("Claude not opened: no interactive terminal.")
+            next_steps(args, target)
+            return 0
+        try:
+            os.chdir(target)
+            os.execvp("claude", ["claude", first_prompt(args.name)])
+        except OSError as e:
+            raise Stop(f"can't open claude: {e.strerror}") from None
+    except Stop as e:
+        print(f"new-claude-project: stopped: {e}", file=sys.stderr)
+        run.report()
+        return 1
+    except KeyboardInterrupt:
+        print("\nnew-claude-project: stopped: interrupted", file=sys.stderr)
+        run.report()
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
