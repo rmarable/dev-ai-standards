@@ -179,9 +179,11 @@ def preflight(  # noqa: PLR0912 (one linear command flow)
             pull = sh(["git", "-C", str(kit), "pull", "--ff-only"])
             if pull.returncode != 0:
                 raise Stop(f"kit update failed (git pull --ff-only): {first_line(pull.stderr)}")
-    elif not args.local:
-        raise Stop(
-            f"the kit at {kit} has no upstream, so it can't be checked up to date (use --local)"
+    else:
+        # A4 finding: warn, don't refuse, when the kit has no upstream (unpublished kit, pilots).
+        print(
+            f"Warning: the kit at {kit} has no upstream, so it can't be checked up to date;"
+            " using it as is"
         )
     version_file = kit / "VERSION"
     version = version_file.read_text().strip() if version_file.is_file() else "unknown"
@@ -193,7 +195,7 @@ def preflight(  # noqa: PLR0912 (one linear command flow)
         f" {commit or 'unknown: not a git checkout'})"
     )
     if not upstream:
-        print("Kit update skipped (no upstream; --local).")
+        print("Kit update skipped (no upstream).")
 
     if args.local:
         print("GitHub checks skipped (--local).")

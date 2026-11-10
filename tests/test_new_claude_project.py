@@ -184,6 +184,7 @@ class LauncherTest(unittest.TestCase):
             res = self.run_script("demo", "--dry-run", *extra, CLAUDECODE="1")
             self.assertEqual(res.returncode, 0, res.stderr)
             self.assertIn("Dry run", res.stdout)
+            self.assertNotIn("Nothing was created", res.stdout + res.stderr)
         self.assertEqual(sorted(p.name for p in self.src.iterdir()), before)
         self.assertFalse((self.src / "demo").exists())
         self.assertEqual(self.log("apply.log"), "")
