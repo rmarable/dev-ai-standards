@@ -1,0 +1,77 @@
+# dev-ai-standards rules-check (core, Enforcement). Runs on every push and PR, with no path filter.
+# The checks and the manifest come from the base branch, never from the branch under test; this
+# file itself is the branch's copy, so a branch can edit it: detection only, not a boundary.
+# Never use pull_request_target here. Actions are pinned by full commit SHA.
+name: rules-check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rules-check:
+    # The required status context. No other workflow job may use this name (merge check).
+    name: rules-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the branch under test (full history)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 TODO pin: verify at A4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0 TODO pin: verify at A4
+        with:
+          python-version: "3.12"
+
+      - name: Take checks and manifest from the base branch
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -eu
+          if [ "$EVENT" = "pull_request" ]; then
+            base="$PR_BASE_SHA"
+          else
+            base="origin/$DEFAULT_BRANCH"
+          fi
+          git rev-parse --verify -q "$base^{commit}" >/dev/null || { echo "rules-check: base $base not found"; exit 1; }
+          dest="$RUNNER_TEMP/base"
+          mkdir -p "$dest"
+          git archive "$base" -- docs/standards/checks docs/standards/manifest | tar -x -C "$dest" \
+            || { echo "rules-check: base $base has no docs/standards/checks or manifest"; exit 1; }
+          echo "BASE_STANDARDS=$dest/docs/standards" >> "$GITHUB_ENV"
+
+      - name: trailer_check (pushed commits only)
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          PUSH_REF: ${{ github.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REPO: ${{ github.repository }}
+          # Read-only token: logins and signature status for the Dependabot, web-flow and root exemptions.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if [ "$EVENT" = "pull_request" ]; then
+            python "$BASE_STANDARDS/checks/trailer_check.py" \
+              --range "$PR_BASE_SHA..$PR_HEAD_SHA" --github-repo "$REPO"
+          else
+            python "$BASE_STANDARDS/checks/trailer_check.py" \
+              --push "$BEFORE" "$AFTER" --ref "$PUSH_REF" --base-ref "origin/$DEFAULT_BRANCH" \
+              --github-repo "$REPO"
+          fi
+
+      - name: rules_check
+        run: |
+          set -eu
+          python "$BASE_STANDARDS/checks/rules_check.py" --manifest "$BASE_STANDARDS/manifest" .

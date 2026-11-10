@@ -1,0 +1,9 @@
+# Agent working files: local only, never committed (dev-ai-standards).
+HANDOFF.md
+CLAUDE-STATE.md
+CLAUDE.local.md
+state-archive/
+.claude/settings.local.json
+
+# Operating system
+.DS_Store

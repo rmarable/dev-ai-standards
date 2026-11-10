@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "dev-ai-standards Claude Code settings snippet (core, Model use and Enforcement). Defaults and reminders, not security controls.",
+    "Keys starting with '_' are notes for people; apply and anyone copying this file leave them out (whether Claude Code accepts unknown keys is unproven until A4).",
+    "Version floor: Claude Code 2.1.251 or later. Before it, CLAUDE_CODE_SUBAGENT_MODEL overrode the per-call model parameter and frontmatter (code.claude.com/docs/en/sub-agents, 2026-11-10).",
+    "Model map: the main session runs the strongest model (the operator's choice, not set here); routine subagents run sonnet, which never reviews.",
+    "CLAUDE_CODE_SUBAGENT_MODEL does not reach the built-in Explore and Plan agents: pass model on each of those calls. Never set CLAUDE_CODE_SUBAGENT_MODEL_FORCE.",
+    "attribution.commit is the one standard trailer; sessionUrl false keeps the Claude-Session trailer out of cloud and Remote Control commits.",
+    "permissions.ask: prompts even in auto mode; not a boundary, and Codex ignores it. Bare forms are listed because a rule with two wildcards doesn't match a command with no trailing arguments. Each pattern is tested at A4.",
+    "Project .claude/settings.json gets env, attribution and permissions (written by apply). User settings (wave 4) get env and attribution only, without permissions.ask. No autoMode, no secrets here."
+  ],
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
+  },
+  "attribution": {
+    "commit": "Co-Authored-By: Claude <noreply@anthropic.com>",
+    "sessionUrl": false
+  },
+  "permissions": {
+    "ask": [
+      "Bash(git push *)",
+      "Bash(git -C * push *)",
+      "Bash(git -c * push *)",
+      "Bash(git tag *)",
+      "Bash(gh release *)",
+      "Bash(gh api *)",
+      "Bash(gh repo *)",
+      "Bash(gh pr merge *)",
+      "Bash(new-claude-project *)",
+      "Bash(*new-claude-project *)",
+      "Bash(git push)",
+      "Bash(git -C * push)",
+      "Bash(git -c * push)",
+      "Bash(new-claude-project)",
+      "Bash(*new-claude-project)"
+    ]
+  }
+}

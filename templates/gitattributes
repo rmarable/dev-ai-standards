@@ -1,0 +1,3 @@
+# Concurrent branches add changelog lines under the same heading; union keeps both sides.
+# Union can misplace a line: reread CHANGELOG.md after each merge (core).
+CHANGELOG.md merge=union

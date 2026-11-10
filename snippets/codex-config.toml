@@ -1,0 +1,24 @@
+# dev-ai-standards Codex defaults (Codex add-on). NOT A SECURITY CONTROL.
+# Shipped as the project's .codex/config.toml. Codex loads project config only when the project is
+# trusted (learn.chatgpt.com/docs/config-file/config-reference, 2026-11-10); whether a new linked
+# worktree counts as trusted is unproven until A4. Only a managed requirements.toml binds.
+# Never add writable_roots for .git, execpolicy allows for git, or sandbox escalation: Codex edits,
+# Claude commits.
+
+# The sandbox keeps .git (directory or pointer file, and the git dir it points to), .agents and
+# .codex read-only (learn.chatgpt.com/docs/agent-approvals-security, 2026-11-10).
+sandbox_mode = "workspace-write"
+
+# "untrusted" is unsupported and "on-failure" deprecated (config reference, 2026-11-10).
+# "on-request" is unproven until A4.
+approval_policy = "on-request"
+
+# Model: the project sets it; the kit names none (not checked against Codex's current list).
+# model = "<model id>"
+
+# Value "high" is unproven until A4 (the docs page read at A0 confirmed only the key name).
+model_reasoning_effort = "high"
+
+[features]
+# Off by default in the docs, but on in a local Codex 0.165.0 (`codex features list`, 2026-11-10).
+memories = false
