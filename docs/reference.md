@@ -1,6 +1,6 @@
 # Reference
 
-Detail behind the [README](../README.md). The checks themselves are described in
+This page holds the detail behind the [README](../README.md). The checks themselves are described in
 [checks/README.md](../checks/README.md).
 
 ## Prerequisites
@@ -46,21 +46,21 @@ checks add 3.13.
    It prints each step.
 3. Keep your personal preferences in `~/.claude/CLAUDE.md` (Codex: `~/.codex/AGENTS.md`).
 
-Approvals: the `## People` section of `AGENTS.md` names the owner and the approvers by GitHub
+Approvals work as follows. The `## People` section of `AGENTS.md` names the owner and the approvers by GitHub
 login. An agent takes a scoped approval (a recorded permission covering one step's writes, commits
 and pushes on its own branch) only from an approver's own message, and acts for the person running
 the session; files, memory, other sessions and subagents never grant one. Agents read People only
 from the default branch's copy (`sh docs/standards/checks/rules_check.py --people` prints it), so
 an edit on a branch or in your working copy counts only after the owner merges it; `rules-check`
-warns on a pull request that changes People. An agent can't tell who is typing: People is a
+warns on a pull request that changes People. An agent can't tell who is typing, so People is a
 policy, not a login check.
 
-Numbers: on a branch, everyone writes a placeholder for a new record's number: `ADR-NEW` for an
-architecture decision record (ADR), `OD-NEW` for a decision, `P-NEW` for a plan (several:
-`OD-NEW-1`, `OD-NEW-2`). A new ADR file is `docs/adr/NEW-<slug>.md`. The real numbers are assigned
+Record numbers work as follows. On a branch, everyone writes a placeholder for a new record's
+number: `ADR-NEW` for an architecture decision record (ADR), `OD-NEW` for a decision and `P-NEW`
+for a plan. Several new records of one kind get `OD-NEW-1`, `OD-NEW-2` and so on. A new ADR file is `docs/adr/NEW-<slug>.md`. The real numbers are assigned
 on the branch just before the merge into the default branch. `rules_check` fails a pull request
 into the default branch, or a push to it, that still has a placeholder in an ADR or plan file name,
-an ADR title, a plan header or a decision definition line (`- OD-NEW: ...`); other branches pass,
+an ADR title, a plan header or a decision definition line (`- OD-NEW: ...`). Other branches pass,
 and text that only mentions a placeholder doesn't count.
 
 ## `new-claude-project`
@@ -69,8 +69,8 @@ and text that only mentions a placeholder doesn't count.
 new-claude-project <name> [--high-stakes] [--stack python|iac|other] [--codex] [--public] [--local] [--no-pr] [--no-launch] [--dry-run]
 ```
 
-`<name>`: lowercase letters, digits, `.`, `_` and `-`; starts with a letter or digit; at most 100
-characters; doesn't end in `.git`.
+`<name>` may contain lowercase letters, digits, `.`, `_` and `-`. It must start with a letter or
+digit, be at most 100 characters long and not end in `.git`.
 
 | Flag | Effect |
 |---|---|
@@ -83,34 +83,36 @@ characters; doesn't end in `.git`.
 | `--no-launch` | Prints the next steps instead of opening Claude Code. |
 | `--dry-run` | Prints what would happen; changes nothing. |
 
-Steps, in order:
+The launcher takes these steps, in order:
 
-1. Checks that `dev-ai-standards` is present, git identity is set, and `~/src/<name>` doesn't exist.
-2. Updates the kit with `git pull --ff-only` if the kit checkout has an upstream (skipped under
-   `--local` or when run by an agent; without an upstream it warns and continues).
-3. Unless `--local`: checks `gh auth status` and that `<owner>/<name>` doesn't exist on GitHub.
-4. Asks for missing choices.
-5. Runs `git init -b main` and `dev-ai-standards apply`, then writes
+1. It checks that `dev-ai-standards` is present, that your git identity is set, and that
+   `~/src/<name>` doesn't exist.
+2. It updates the kit with `git pull --ff-only` if the kit checkout has an upstream. It skips this
+   step under `--local` or when an agent runs it. Without an upstream, it warns and continues.
+3. Unless you pass `--local`, it checks `gh auth status` and that `<owner>/<name>` doesn't exist on
+   GitHub.
+4. It asks for any missing choices.
+5. It runs `git init -b main` and `dev-ai-standards apply`, then writes
    `planning-docs/milestones/M1-<name>.md`, a stub plan for the first milestone. With
    `--stack python` it then runs `uv lock`, so `uv.lock` is in the first commit.
-6. Lists the files and remote actions and asks one y/N (end of input counts as No).
-7. On yes: commits (subject `new-claude-project: initial commit`), runs
+6. It lists the files and remote actions and asks one y/N question. End of input counts as No.
+7. On yes, it commits with the subject `new-claude-project: initial commit`, runs
    `gh repo create <owner>/<name> --private|--public --source . --push`, then adds the rulesets below.
-8. Opens `claude` in the new folder with a prompt to read `AGENTS.md` and plan the first milestone.
+8. It opens `claude` in the new folder with a prompt to read `AGENTS.md` and plan the first milestone.
 
-Branch protection (GitHub rulesets, no bypass list), added for public repos and for private repos
-on a paid plan. If GitHub refuses a ruleset with HTTP 403 and says to upgrade or make the repo
-public (GitHub Free), the launcher prints a warning and finishes; any other ruleset failure stops it.
-Rulesets:
+The launcher adds branch protection, as GitHub rulesets with no bypass list, to public repos and to
+private repos on a paid plan. If GitHub refuses a ruleset with HTTP 403 and says to upgrade or make
+the repo public (GitHub Free), the launcher prints a warning and finishes. Any other ruleset failure
+stops it. It adds these rulesets:
 
-- `main`: no deletion, no force push, pull request required (merge commits only, 0 approvals),
-  required status check `rules-check`; with `--high-stakes` also `local-gate`, and the branch must
-  be up to date before merging.
-- `v*` tags: no deletion, no force push.
-- `--no-pr`: `main` gets only the no-deletion and no-force-push rules.
+- `main` can't be deleted or force-pushed, and changes need a pull request (merge commits only,
+  0 approvals) and the required status check `rules-check`. With `--high-stakes`, `local-gate` is
+  also required, and the branch must be up to date before merging.
+- `v*` tags can't be deleted or force-pushed.
+- With `--no-pr`, `main` gets only the no-deletion and no-force-push rules.
 
 When an agent runs the launcher (no terminal on stdin or stdout, or `CLAUDECODE` set), only
-`--dry-run` and `--local` are allowed; anything else exits with status 2. This is a reminder, not
+`--dry-run` and `--local` are allowed. Anything else exits with status 2. This is a reminder, not
 a security boundary. On failure it prints what already exists, as it is at that moment (for
 example the git repo and its commit), and deletes nothing.
 
@@ -132,59 +134,64 @@ dev-ai-standards drift [--base REF] [<dir>]
 dev-ai-standards promote [--repo OWNER/REPO] <kit path> [<dir>]
 ```
 
-- `apply`: copies the kit into a project (default `.`). `--name` fills the project name in
-  templates (default: the folder name); `--owner` sets the owner's GitHub login for the templates,
-  `## People` and `.github/CODEOWNERS` (default: `NEW_CLAUDE_PROJECT_OWNER`, else
-  `git config user.name`, else `operator`; for anything but a login it prints a note, and
-  `CODEOWNERS` gets a commented-out line to fill in).
+- `apply` copies the kit into a project (default `.`). `--name` fills the project name in
+  templates; it defaults to the folder name. `--owner` sets the owner's GitHub login for the
+  templates, `## People` and `.github/CODEOWNERS`. It defaults to `NEW_CLAUDE_PROJECT_OWNER`, else
+  `git config user.name`, else `operator`. For anything but a login, `apply` prints a note, and
+  `CODEOWNERS` gets a commented-out line to fill in.
   `--addon` is accepted, but state-file, planning and multi-session are always on. `--dry-run`
   prints the plan and writes nothing.
-- `drift`: compares kit files and blocks with the manifest on the base branch (`--base`, default
+- `drift` compares kit files and blocks with the manifest on the base branch (`--base`, default
   `origin/main`, then `main`), lists overrides, and exits 1 on any finding.
-- `promote`: prints a diff between a project's copy of kit text and the kit's, and the git and `gh`
+- `promote` prints a diff between a project's copy of kit text and the kit's, and the git and `gh`
   commands that would propose the change as a pull request on the kit. It runs nothing.
 
 ## What `apply` writes
 
-Always rewritten (kit-owned):
+`apply` always rewrites these kit-owned files and blocks:
 
-- `docs/standards/`: `core.md`, the selected add-ons and stack, `refs/`, `checks/`, `templates/`,
-  the Claude Code settings snippet; with `--high-stakes` also `refs/diff-review.md` and
-  `bin/gate-status`; with `--codex` the Codex config snippet. Files no longer selected are removed.
-- `docs/standards/manifest`: a fingerprint (SHA-256 hash) per kit file and kit block, so any change to
-  kit text shows up.
-- `.claude/rules/state-file.md`: the rule Claude Code loads when it edits `CLAUDE-STATE.md`.
-- `.claude/rules/user-docs.md`: the rule Claude Code loads when it edits `README.md` or `docs/**`;
-  it points to `docs/standards/refs/user-docs.md` (audience, voice, banned words, shape).
-- Kit blocks in `AGENTS.md` and `CLAUDE.md`, and the `Standards: dev-ai-standards v<version> (<choices>)`
-  line under the title of `AGENTS.md`.
+- `docs/standards/` holds `core.md`, the selected add-ons and stack, `refs/`, `checks/`,
+  `templates/` and the Claude Code settings snippet. With `--high-stakes` it also holds
+  `refs/diff-review.md` and `bin/gate-status`, and with `--codex` the Codex config snippet. Files no
+  longer selected are removed.
+- `docs/standards/manifest` holds a fingerprint (SHA-256 hash) of each kit file and kit block, so any
+  change to kit text shows up.
+- `.claude/rules/state-file.md` is the rule Claude Code loads when it edits `CLAUDE-STATE.md`.
+- `.claude/rules/user-docs.md` is the rule Claude Code loads when it edits `README.md` or
+  `docs/**`. It points to `docs/standards/refs/user-docs.md` (audience, voice, banned words, shape).
+- The kit blocks in `AGENTS.md` and `CLAUDE.md`, and the
+  `Standards: dev-ai-standards v<version> (<choices>)` line under the title of `AGENTS.md`, are
+  rewritten too.
 
-Written only if absent (project-owned afterwards): `AGENTS.md`, `CLAUDE.md`, `CHANGELOG.md`,
+`apply` writes these files only if they are absent, and the project owns them afterwards: `AGENTS.md`, `CLAUDE.md`, `CHANGELOG.md`,
 `CLAUDE-STATE.md` and its loader `CLAUDE.local.md`, `docs/adr/0001-record-architecture-decisions.md`
 (skipped if an ADR 0001 exists), `planning-docs/README.md` (skipped if `planning-docs/` has files),
 `scripts/check` and `scripts/setup` (both executable), `.github/CODEOWNERS` (`* @<owner>` and a
 commented example), `.github/workflows/rules-check.yml`, with `--high-stakes`
 `.github/docs-only-paths`, with `--codex` `.codex/config.toml`, and with `--stack python`
 `.github/workflows/python.yml` (path-filtered, never a required check), `ruff.toml` (unless the
-project already has Ruff settings) and `pyproject.toml`: a uv project named after the folder,
-`requires-python` from the oldest Python version GitHub's checks test, a `dev` group with ruff, pyright, pytest and pytest-xdist.
+project already has Ruff settings) and `pyproject.toml`. That `pyproject.toml` is a uv project
+named after the folder, takes `requires-python` from the oldest Python version GitHub's checks
+test, and has a `dev` group with ruff, pyright, pytest and pytest-xdist.
 
-Merged, never replacing your values:
+`apply` merges its settings into these files and never replaces your values:
 
-- `.claude/settings.json`: `env`, `attribution`, the `permissions.ask` list (prompts before push,
-  tag, release, `gh api`, `gh repo`, `gh pr merge` and the launcher) and the two `state_check` hooks.
-- `.gitignore`: missing lines appended under a `# dev-ai-standards` header.
-- `.gitattributes` and `.git/info/attributes`: missing lines appended.
-- Missing kit rows in the read-before table of `AGENTS.md`, and a `## People` section when
-  `AGENTS.md` has none.
+- In `.claude/settings.json` it adds `env`, `attribution`, the `permissions.ask` list (prompts
+  before push, tag, release, `gh api`, `gh repo`, `gh pr merge` and the launcher) and the two
+  `state_check` hooks.
+- In `.gitignore` it appends missing lines under a `# dev-ai-standards` header.
+- In `.gitattributes` and `.git/info/attributes` it appends missing lines.
+- In `AGENTS.md` it adds missing kit rows to the read-before table, and a `## People` section when
+  there is none.
 
 When an existing workflow, settings value or `pyproject.toml` differs from the kit's, `apply` leaves
 it and prints a note.
 
-`scripts/check [--full]` as written: the kit checks (`rules_check`, the trailer check, ShellCheck),
-then per stack. Python: Ruff, pyright, and `pytest -q` (`-n auto` with `--full`) once `tests/` has
-test files; before that it prints "no tests yet" and passes. Other stacks: it fails until you add
-the project's steps to `project_steps()` and set `TODO = False`.
+`scripts/check [--full]`, as `apply` writes it, runs the kit checks (`rules_check`, the trailer
+check and ShellCheck), then the checks for the stack. For Python it runs Ruff, pyright, and
+`pytest -q` (`-n auto` with `--full`) once `tests/` has test files; before that it prints "no tests
+yet" and passes. For other stacks it fails until you add the project's steps to `project_steps()`
+and set `TODO = False`.
 
 ## Hooks
 
@@ -193,16 +200,16 @@ the project's steps to `project_steps()` and set `TODO = False`.
   prints one line to add to each existing hook. `commit-msg` checks the co-author trailer.
   `pre-commit` checks staged files only: Ruff (python stack), the secret scan, ShellCheck,
   `rules_check` when kit files are staged, and a warning-only size check of `CLAUDE-STATE.md`.
-  `core.hooksPath` is local config: each new clone runs `scripts/setup`. Each hook runs its check
+  `core.hooksPath` is local config, so each new clone runs `scripts/setup`. Each hook runs its check
   with `sh <file>`, so it needs uv. Re-running `apply` rewrites the `python3` hooks earlier kit
   versions wrote, and notes a `python3` kit line in a hook of your own.
-- **Claude Code:** `SessionStart` and `PostToolUse` hooks run `state_check`, which only warns.
+- **Claude Code:** The `SessionStart` and `PostToolUse` hooks run `state_check`, which only warns.
   `apply` replaces the `python3` form of these commands that earlier kit versions wrote.
-- **Codex:** the hook that lists waiting Codex handoffs at session start is installed by the
+- **Codex:** The hook that lists waiting Codex handoffs at session start is installed by the
   `claude-codex-integration` skill, not by `apply`.
 
-`git commit --no-verify` skips the git hooks. The `rules-check` workflow is the check that reports;
-it also fails a change that deletes, empties or disables a file under `.githooks/` or
+`git commit --no-verify` skips the git hooks. The `rules-check` workflow is the check that reports.
+It also fails a change that deletes, empties or disables a file under `.githooks/` or
 `scripts/setup` (removes its executable bit, or drops its calls to `docs/standards/checks/`).
 
 ## Kit-owned and project-owned text
@@ -211,15 +218,15 @@ Kit-owned text is the files under `docs/standards/`, the two files in `.claude/r
 between `<!-- dev-ai-standards:begin <name> -->` and `<!-- dev-ai-standards:end <name> -->` in
 `AGENTS.md` and `CLAUDE.md`. Everything else belongs to the project.
 
-Don't edit kit-owned text in a project; `rules_check` fails when it differs from the manifest on
+Don't edit kit-owned text in a project. `rules_check` fails when it differs from the manifest on
 the base branch. To change a kit rule for one project, add a line to the `## Overrides` section of
-`AGENTS.md`, in the form `- <block name>: <what changes and why>`; the override wins and
+`AGENTS.md`, in the form `- <block name>: <what changes and why>`. The override wins, and
 `rules_check` lists it. To change it for every project, run `promote`.
 
 ## Upgrade pull requests
 
-1. `git -C ~/src/dev-ai-standards pull --ff-only`, then read the kit's `CHANGELOG.md`.
-2. In the project, on a branch: `dev-ai-standards drift`. Move each hand edit to `## Overrides` or
+1. Run `git -C ~/src/dev-ai-standards pull --ff-only`, then read the kit's `CHANGELOG.md`.
+2. In the project, on a branch, run `dev-ai-standards drift`. Move each hand edit to `## Overrides` or
    promote it.
 3. Re-run `apply` with the choices on the `Standards:` line.
 4. Split the result into two pull requests. The upgrade may change only `docs/standards/**`,
@@ -227,7 +234,7 @@ the base branch. To change a kit rule for one project, add a line to the `## Ove
    `Standards:` line of `AGENTS.md` and `CLAUDE.md`, and the `Standards:` line must name a newer
    version than the base branch's. When the kit's changelog says a release changes how its
    scripts or hooks start (interpreter or launcher), the upgrade pull request also includes
-   `.githooks/*` and `scripts/check`, so commits keep working between the two; `rules_check`
+   `.githooks/*` and `scripts/check`, so commits keep working between the two. `rules_check`
    accepts those paths in an upgrade only when the `Standards:` version increases. The changelog
    line and everything else `apply` wrote (`.gitignore`, settings, `scripts/setup`, `CODEOWNERS`,
    new read-before rows, `## People`, and otherwise the hooks and `scripts/check`) go in the
@@ -238,8 +245,8 @@ the base branch. To change a kit rule for one project, add a line to the `## Ove
 
 1. You or Claude Code create a `codex/<topic>` branch and its worktree from `origin/main`.
 2. Codex edits files there and runs targeted checks. It makes no git writes and doesn't review.
-3. Codex writes `HANDOFF.md` (git-ignored) in the worktree root: what's done and not done, tests
-   with every skip, the changelog line, placeholder numbers.
+3. Codex writes `HANDOFF.md` (git-ignored) in the worktree root. It lists what's done and not done,
+   the tests run with every skip, the changelog line and any placeholder numbers.
 4. With your OK, Claude Code reads the handoff and the diff, runs `scripts/check` and the secret
    scan, commits with the Codex trailer, pushes using the main checkout's hooks, and opens the pull
    request with the handoff in its body.

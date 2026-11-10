@@ -5,8 +5,9 @@ Read before editing `README.md`, anything under `docs/` (except the kit copies i
 
 - **U1 Audience.** Technical non-specialists: they know git and a terminal, not this project's
   internals.
-- **U2 Voice.** Terse, exact, informative. Plain declarative sentences, concrete nouns and verbs,
-  numbers where they help. Address the reader as "you".
+- **U2 Voice.** Terse, exact, informative. Write complete declarative sentences, not fragments,
+  with concrete nouns and verbs and numbers where they help. Table cells may be short phrases.
+  Address the reader as "you".
 - **U3 Banned.**
   - Marketing words: seamless, powerful, robust, leverage, streamline, effortless, empower,
     unlock, comprehensive, cutting-edge, simply, just.
