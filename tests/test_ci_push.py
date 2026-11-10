@@ -7,8 +7,6 @@ checker, fails. A forced push to main fails; a push to any other branch, forced 
 with its merge-base with main (F1-1).
 """
 
-from __future__ import annotations
-
 import hashlib
 import os
 import re

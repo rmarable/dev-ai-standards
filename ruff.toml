@@ -1,8 +1,8 @@
-# Ruff settings for the kit's own code: the same rules as templates/ruff.toml (from ecf), but
-# target py39, since kit scripts must run on the stock macOS Python 3.9 (K1-14, G2).
+# Ruff settings for the kit's own code: the same rules as templates/ruff.toml (from ecf). Kit
+# scripts run on uv-managed Python 3.12 or later (operator decision 2026-11-10), so target py312.
 # bin/ and scripts/ tools have no .py extension: scripts/check passes them to Ruff by name.
 line-length = 100
-target-version = "py39"
+target-version = "py312"
 # templates/ holds unrendered project files ({{python_target}}, guarded scripts/check).
 extend-exclude = ["templates", "planning-docs"]
 

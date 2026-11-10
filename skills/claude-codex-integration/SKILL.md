@@ -122,7 +122,7 @@ The Codex add-on owns each step; this is the order only.
    `HANDOFF.md`, and makes no git writes.
 4. After Codex's task ends and the operator's OK: Claude's pick-up from the add-on (git-dir check,
    `-c core.fsmonitor=false`, merge check, explicit paths, then `scripts/check` and
-   `python3 docs/standards/checks/secret_scan.py --staged`, stopping on any failure, hooks-off
+   `sh docs/standards/checks/secret_scan.py --staged`, stopping on any failure, hooks-off
    commit with the Handoff block above the Codex trailer, re-check, push with main's hooks, PR or
    local merge under `--no-pr`).
 5. Fixes go back to Codex as a list; Codex answers in its next `HANDOFF.md`. After the merge, remove

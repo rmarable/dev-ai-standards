@@ -41,8 +41,8 @@ write.
   (learn.chatgpt.com/docs/agent-approvals-security, 2026-11-10).
 - Each writing session or subagent uses its own branch and worktree and never works in another's.
   The one exception: Claude commits in Codex's worktree after Codex's task ends.
-- Codex writes `-NEW` placeholders (`OD-NEW`, `ADR-NEW`, `P-NEW`; several: `OD-NEW-1`, `OD-NEW-2`).
-  Claude assigns real numbers first at pick-up.
+- Codex, like everyone, writes `-NEW` placeholders (`OD-NEW`, `ADR-NEW`, `P-NEW`; several:
+  `OD-NEW-1`, `OD-NEW-2`). Real numbers are assigned when merging to `main` (planning add-on).
 - Codex records decisions in its edits (an ADR or spec entry with placeholders), never only in
   chat. Notes go in its plan doc, never its Decisions or approval lines.
 - Codex doesn't review. It doesn't start a plan that needs Phase R until Phase R is done.
@@ -63,9 +63,10 @@ don't commit".
 2. Read `HANDOFF.md` and the whole change. Run the merge check (core, Enforcement) on
    `git status --porcelain --untracked-files=all` and `git diff HEAD`: reserved list not crossed,
    CHANGELOG line, tests, placeholders.
-3. Assign real numbers for every `-NEW` placeholder.
+3. Leave `-NEW` placeholders; real numbers are assigned just before the merge to `main` (planning
+   add-on).
 4. Stage explicit paths. With hooks off nothing runs on its own, so first run `scripts/check` and
-   `python3 docs/standards/checks/secret_scan.py --staged`; stop on any failure. Commit with
+   `sh docs/standards/checks/secret_scan.py --staged`; stop on any failure. Commit with
    `git -c core.hooksPath=/dev/null commit`: the Handoff block above the Codex trailer, no other
    trailer. Re-check the commit.
 5. Push with main's hooks: `git -c core.hooksPath=<absolute path of the main checkout>/.githooks

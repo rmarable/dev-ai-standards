@@ -4,8 +4,6 @@ Fake `gh` and `claude` executables go first on PATH; nothing calls GitHub or the
 kit's real bin/dev-ai-standards is used when present, else a fake (NCP_TEST_FAKE_APPLY=1 forces it).
 """
 
-from __future__ import annotations
-
 import os
 import pty
 import shutil
@@ -416,25 +414,14 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
         target = self.src / "demo"
         calls = [ln.split("|", 1) for ln in self.log("uv.log").splitlines()]
+        # Other calls are the hooks' sh fronts (`uv run --script ...`) during the commit.
+        calls = [c for c in calls if not c[1].startswith("run --script ")]
         self.assertEqual([c[1] for c in calls], ["lock"])
         self.assertEqual(Path(calls[0][0]).resolve(), target.resolve())
         files = self.git_out(target, "ls-tree", "-r", "--name-only", "HEAD").split()
         self.assertIn("uv.lock", files)
         self.assertIn("pyproject.toml", files)
         self.assertEqual(self.git_out(target, "status", "--porcelain"), "")
-
-    @unittest.skipIf(USE_FAKE_APPLY, "needs the real apply (writes pyproject.toml)")
-    def test_python_stack_without_uv_warns(self) -> None:
-        # PATH without uv: the fake tools, git's and the shell's own directories only.
-        git_dir = Path(shutil.which("git") or "/usr/bin/git").parent
-        dirs = [str(self.tmp / "fakebin"), str(git_dir), "/usr/bin", "/bin"]
-        self.assertFalse(any((Path(d) / "uv").exists() for d in dirs), "uv found on test PATH")
-        res = self.run_script("demo", "--local", "--stack", "python", PATH=os.pathsep.join(dirs))
-        self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
-        self.assertIn("Warning: uv not found", res.stdout)
-        self.assertIn("uv sync --locked", res.stdout)
-        files = self.git_out(self.src / "demo", "ls-tree", "-r", "--name-only", "HEAD").split()
-        self.assertNotIn("uv.lock", files)
 
 
 if __name__ == "__main__":

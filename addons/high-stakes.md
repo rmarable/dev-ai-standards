@@ -11,9 +11,10 @@ its approvers in its own `AGENTS.md` text; this file never names a project.
   don't merge).
 - Read `docs/standards/addons/high-stakes.md` before a review, a gate run, a release, a
   real-service test or heavy shared work.
-- Run `gate-status` only as the base branch's copy, never the checkout's: `git fetch origin && git
-  show origin/main:docs/standards/bin/gate-status > "$TMPDIR/gate-status" && python3
-  "$TMPDIR/gate-status" <args>`.
+- Run `gate-status` only as the base branch's copy, never the checkout's, and always through
+  `uv run`, never `sh` (an older base copy is plain Python): `git fetch origin && d=$(mktemp -d)
+  && git show origin/main:docs/standards/bin/gate-status > "$d/gate-status" && uv run
+  --no-project --python 3.12 python "$d/gate-status" <args>`.
 
 ## Reviews
 
@@ -83,9 +84,10 @@ sessions still apply without asking. If a peer doesn't answer, tell the operator
 ## Local-gate status (PR projects with a local gate)
 
 - Required, with up-to-date branches. Only Claude posts it, through `docs/standards/bin/gate-status`,
-  always the base branch's copy, never the checkout's: `git fetch origin && git show
-  origin/main:docs/standards/bin/gate-status > "$TMPDIR/gate-status" && python3
-  "$TMPDIR/gate-status" --check` (then `--docs-only` or `--passed N --skipped 0`).
+  always the base branch's copy, never the checkout's, run with `uv run`: `git fetch origin &&
+  d=$(mktemp -d) && git show origin/main:docs/standards/bin/gate-status > "$d/gate-status" && uv
+  run --no-project --python 3.12 python "$d/gate-status" --check` (then `--docs-only` or
+  `--passed N --skipped 0`).
 - The script and the docs-only list are always read from the base branch (`origin/main`, after
   `git fetch`), never from the PR's branch; the PR head can't change either.
 - Docs only is decided on `git diff --no-renames --raw origin/main...HEAD` (or `--name-status -M`
@@ -113,5 +115,7 @@ its own step.
 
 ## Approvers
 
-The project names who approves `main` merges, tags and rule changes. Team repos (two or more
-humans): one human approval, and `CODEOWNERS` on the enforcement paths and on `## Overrides`.
+The Approvers in `AGENTS.md` People, as the default branch has it, approve `main` merges, tags and
+rule changes; "the operator" is People's Owner. A People change counts only once merged by the
+owner (rules-check warns on it). Team repos (two or more humans): one human approval, and
+`CODEOWNERS` on the enforcement paths and on `## Overrides`.

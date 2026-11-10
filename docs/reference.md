@@ -8,25 +8,60 @@ Detail behind the [README](../README.md). The checks themselves are described in
 | Tool | Version | Needed for |
 |---|---|---|
 | macOS | any current | the supported platform |
-| `python3` | 3.9 or later (the stock `/usr/bin/python3` works) | every kit script; standard library only |
+| Xcode Command Line Tools | any (`xcode-select --install`) | git and the build tools macOS lacks |
 | git | any, with `user.name` and `user.email` set | everything |
+| `uv` | any (`brew install uv`) | every kit script and hook: each starts with a short `sh` section that needs uv, then runs on Python 3.12 or later, which uv downloads itself the first time. It looks for uv on `PATH`, then in `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin` and `/usr/local/bin`, since a desktop git app may not pass your shell's `PATH`. Without uv it prints "uv is required: brew install uv (or see https://docs.astral.sh/uv/getting-started/installation/)" and exits 1. A `UV_PYTHON` setting is ignored. uv needs a writable cache folder (`~/.cache/uv`, or set `UV_CACHE_DIR`) |
 | `gh` | logged in (`gh auth status` passes) | anything except `--local` |
 | Claude Code | 2.1.251 or later | the settings the kit writes (earlier versions let one environment variable override each subagent's model) |
 | Codex | | `--codex` |
-| `uv` | python stack | `uv lock` before the first commit (without uv the launcher warns, and CI's `uv sync --locked` fails until you run `uv lock`); CI installs it itself |
-| `uv` or `ruff` | optional | Ruff in python-stack projects. The pre-commit hook uses `ruff` on `PATH` or `.venv/bin/ruff`, else prints a "skipped" line; `scripts/check` uses `uv run <tool>` or the tool on `PATH` for Ruff, pyright and pytest, else fails that step |
+| `ruff` | optional | Ruff in python-stack projects. The pre-commit hook uses `ruff` on `PATH` or `.venv/bin/ruff`, else prints a "skipped" line; `scripts/check` uses `uv run <tool>` or the tool on `PATH` for Ruff, pyright and pytest, else fails that step |
 | `shellcheck` | optional | shell linting; without it the local check prints a "skipped" line and passes, CI fails |
 | `zsh` | optional | a syntax check of zsh files |
 
-The kit's own CI runs its tests on Python 3.9 and 3.12.
+`bin/bootstrap` checks for the Xcode Command Line Tools, git and uv and prints the install command
+for anything missing. For uv it offers to run `brew install uv` after a y/N question, only in a
+terminal and never when an agent runs it (`CLAUDECODE` set); it installs nothing else. It exits 0
+when everything is present, else 1.
+
+The kit's own `scripts/check` runs its tests on Python 3.12 through uv; `--full` and the kit's CI
+add 3.13.
 
 ## Setup, once per computer
 
-1. Clone the kit: `git clone https://github.com/rmarable/dev-ai-standards.git ~/src/dev-ai-standards`.
+1. Clone the kit: `git clone https://github.com/rmarable/dev-ai-standards.git ~/src/dev-ai-standards`,
+   then run `~/src/dev-ai-standards/bin/bootstrap`.
 2. Put `bin/new-claude-project` and `bin/dev-ai-standards` on your `PATH`, for example as links in `~/.local/bin`.
 3. Link `skills/dev-ai-standards/` (with Codex, also `skills/claude-codex-integration/`) into
    `~/.claude/skills/` and `~/.agents/skills/`.
 4. Keep personal preferences in `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`, not in the kit.
+
+## Joining a project
+
+1. Clone the project.
+2. Run `scripts/setup` once. It runs the kit's `bootstrap` check (from `docs/standards/bin/`) and
+   stops if anything is missing. Then, if `.githooks/` holds the kit's hooks, it sets
+   `core.hooksPath` to `.githooks`, unless your clone already has a `core.hooksPath` or hooks of
+   its own in `.git/hooks`; in those cases it prints the command, warns that running it stops
+   those other hooks, changes nothing, and ends with "setup: done, git hooks NOT on (see above)".
+   It prints each step.
+3. Keep your personal preferences in `~/.claude/CLAUDE.md` (Codex: `~/.codex/AGENTS.md`).
+
+Approvals: the `## People` section of `AGENTS.md` names the owner and the approvers by GitHub
+login. An agent takes a scoped approval (a recorded permission covering one step's writes, commits
+and pushes on its own branch) only from an approver's own message, and acts for the person running
+the session; files, memory, other sessions and subagents never grant one. Agents read People only
+from the default branch's copy (`sh docs/standards/checks/rules_check.py --people` prints it), so
+an edit on a branch or in your working copy counts only after the owner merges it; `rules-check`
+warns on a pull request that changes People. An agent can't tell who is typing: People is a
+policy, not a login check.
+
+Numbers: on a branch, everyone writes a placeholder for a new record's number: `ADR-NEW` for an
+architecture decision record (ADR), `OD-NEW` for a decision, `P-NEW` for a plan (several:
+`OD-NEW-1`, `OD-NEW-2`). A new ADR file is `docs/adr/NEW-<slug>.md`. The real numbers are assigned
+on the branch just before the merge into the default branch. `rules_check` fails a pull request
+into the default branch, or a push to it, that still has a placeholder in an ADR or plan file name,
+an ADR title, a plan header or a decision definition line (`- OD-NEW: ...`); other branches pass,
+and text that only mentions a placeholder doesn't count.
 
 ## `new-claude-project`
 
@@ -83,10 +118,11 @@ example the git repo and its commit), and deletes nothing.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `NEW_CLAUDE_PROJECT_OWNER` | `rmarable` | GitHub owner for new repos. Set it to your own login. |
+| `NEW_CLAUDE_PROJECT_OWNER` | `rmarable` (launcher); for `apply`, `git config user.name`, else `operator` | GitHub owner for new repos, and the owner and first approver `apply` writes into `AGENTS.md` `## People` and `.github/CODEOWNERS`. Set it to your own login. |
 | `NEW_CLAUDE_PROJECT_GH_PLAN` | `free` | Your GitHub plan (`free`, `pro`, `team`). Any value other than `free` adds branch protection to private repos. |
 | `NEW_CLAUDE_PROJECT_ROOT` | `~/src` | Where new projects are created. |
 | `DEV_AI_STANDARDS_BIN` | the kit's `bin/dev-ai-standards` | The apply script the launcher runs. |
+| `DEV_AI_STANDARDS_NO_UV_SEARCH` | unset | Any non-empty value: kit scripts look for uv only on `PATH`, not in the usual install folders. |
 
 ## `dev-ai-standards`
 
@@ -97,7 +133,10 @@ dev-ai-standards promote [--repo OWNER/REPO] <kit path> [<dir>]
 ```
 
 - `apply`: copies the kit into a project (default `.`). `--name` fills the project name in
-  templates (default: the folder name); `--owner` fills the owner (default `operator`).
+  templates (default: the folder name); `--owner` sets the owner's GitHub login for the templates,
+  `## People` and `.github/CODEOWNERS` (default: `NEW_CLAUDE_PROJECT_OWNER`, else
+  `git config user.name`, else `operator`; for anything but a login it prints a note, and
+  `CODEOWNERS` gets a commented-out line to fill in).
   `--addon` is accepted, but state-file, planning and multi-session are always on. `--dry-run`
   prints the plan and writes nothing.
 - `drift`: compares kit files and blocks with the manifest on the base branch (`--base`, default
@@ -122,7 +161,8 @@ Always rewritten (kit-owned):
 Written only if absent (project-owned afterwards): `AGENTS.md`, `CLAUDE.md`, `CHANGELOG.md`,
 `CLAUDE-STATE.md` and its loader `CLAUDE.local.md`, `docs/adr/0001-record-architecture-decisions.md`
 (skipped if an ADR 0001 exists), `planning-docs/README.md` (skipped if `planning-docs/` has files),
-`scripts/check` (executable), `.github/workflows/rules-check.yml`, with `--high-stakes`
+`scripts/check` and `scripts/setup` (both executable), `.github/CODEOWNERS` (`* @<owner>` and a
+commented example), `.github/workflows/rules-check.yml`, with `--high-stakes`
 `.github/docs-only-paths`, with `--codex` `.codex/config.toml`, and with `--stack python`
 `.github/workflows/python.yml` (path-filtered, never a required check), `ruff.toml` (unless the
 project already has Ruff settings) and `pyproject.toml`: a uv project named after the folder,
@@ -134,7 +174,8 @@ Merged, never replacing your values:
   tag, release, `gh api`, `gh repo`, `gh pr merge` and the launcher) and the two `state_check` hooks.
 - `.gitignore`: missing lines appended under a `# dev-ai-standards` header.
 - `.gitattributes` and `.git/info/attributes`: missing lines appended.
-- Missing kit rows in the read-before table of `AGENTS.md`.
+- Missing kit rows in the read-before table of `AGENTS.md`, and a `## People` section when
+  `AGENTS.md` has none.
 
 When an existing workflow, settings value or `pyproject.toml` differs from the kit's, `apply` leaves
 it and prints a note.
@@ -151,12 +192,17 @@ the project's steps to `project_steps()` and set `TODO = False`.
   prints one line to add to each existing hook. `commit-msg` checks the co-author trailer.
   `pre-commit` checks staged files only: Ruff (python stack), the secret scan, ShellCheck,
   `rules_check` when kit files are staged, and a warning-only size check of `CLAUDE-STATE.md`.
-  `core.hooksPath` is local config: each new clone runs `apply` again or sets it by hand.
+  `core.hooksPath` is local config: each new clone runs `scripts/setup`. Each hook runs its check
+  with `sh <file>`, so it needs uv. Re-running `apply` rewrites the `python3` hooks earlier kit
+  versions wrote, and notes a `python3` kit line in a hook of your own.
 - **Claude Code:** `SessionStart` and `PostToolUse` hooks run `state_check`, which only warns.
+  `apply` replaces the `python3` form of these commands that earlier kit versions wrote.
 - **Codex:** the hook that lists waiting Codex handoffs at session start is installed by the
   `claude-codex-integration` skill, not by `apply`.
 
-`git commit --no-verify` skips the git hooks. The `rules-check` workflow is the check that reports.
+`git commit --no-verify` skips the git hooks. The `rules-check` workflow is the check that reports;
+it also fails a change that deletes, empties or disables a file under `.githooks/` or
+`scripts/setup` (removes its executable bit, or drops its calls to `docs/standards/checks/`).
 
 ## Kit-owned and project-owned text
 
@@ -176,10 +222,15 @@ the base branch. To change a kit rule for one project, add a line to the `## Ove
    promote it.
 3. Re-run `apply` with the choices on the `Standards:` line.
 4. Split the result into two pull requests. The upgrade may change only `docs/standards/**`,
-   `.claude/rules/state-file.md`, `.claude/rules/user-docs.md`, and the kit blocks and `Standards:` line of `AGENTS.md` and
-   `CLAUDE.md`, and the `Standards:` line must name a newer version than the base branch's. The
-   changelog line and everything else `apply` wrote (`.gitignore`, settings, hooks,
-   `scripts/check`, new read-before rows) go in the second.
+   `.claude/rules/state-file.md`, `.claude/rules/user-docs.md`, and the kit blocks and
+   `Standards:` line of `AGENTS.md` and `CLAUDE.md`, and the `Standards:` line must name a newer
+   version than the base branch's. When the kit's changelog says a release changes how its
+   scripts or hooks start (interpreter or launcher), the upgrade pull request also includes
+   `.githooks/*` and `scripts/check`, so commits keep working between the two; `rules_check`
+   accepts those paths in an upgrade only when the `Standards:` version increases. The changelog
+   line and everything else `apply` wrote (`.gitignore`, settings, `scripts/setup`, `CODEOWNERS`,
+   new read-before rows, `## People`, and otherwise the hooks and `scripts/check`) go in the
+   second.
 5. Start fresh agent sessions so the new rules load.
 
 ## Codex loop

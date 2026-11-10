@@ -1,5 +1,25 @@
-#!/usr/bin/env python3
-"""pre_commit: the git pre-commit hook `apply` installs (`.githooks/pre-commit` runs this file).
+#!/bin/sh
+# /// script
+# requires-python = ">=3.12"
+# ///
+""":"
+# sh front (POSIX sh, so it runs on a stock Mac): needs uv, then runs this file as Python >= 3.12.
+# GUI git clients may not pass the shell's PATH, so uv's usual folders are tried too.
+if [ -z "${DEV_AI_STANDARDS_NO_UV_SEARCH-}" ] && ! command -v uv >/dev/null 2>&1; then
+  for d in "$HOME/.local/bin" "$HOME/.cargo/bin" /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "$d/uv" ]; then PATH="$d:$PATH"; export PATH; break; fi
+  done
+fi
+if ! command -v uv >/dev/null 2>&1; then
+  printf '%s %s\n' 'uv is required: brew install uv' \
+    '(or see https://docs.astral.sh/uv/getting-started/installation/)' >&2
+  exit 1
+fi
+# A user-level UV_PYTHON would override requires-python above.
+unset UV_PYTHON
+exec uv run --script "$0" "$@"
+":
+pre_commit: the git pre-commit hook `apply` installs (`.githooks/pre-commit` runs this file).
 
 A convenience, not a boundary: `--no-verify` skips it and CI is the check. It takes the staged
 file names but, except for the secret scan, reads their working-tree content (with `git add -p`
@@ -12,8 +32,6 @@ it checks what is on disk). It never runs tests or `scripts/check` (operator dec
 - `rules_check` only when kit files, the manifest, `AGENTS.md` or `CLAUDE.md` are staged;
 - `state_check` as a warning only.
 """
-
-from __future__ import annotations
 
 import os
 import shutil

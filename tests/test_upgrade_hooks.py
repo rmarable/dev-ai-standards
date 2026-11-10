@@ -5,8 +5,6 @@ changes nothing but kit text, the manifest and a strictly newer Standards line; 
 `.githooks/commit-msg` in a repo with no hooks and otherwise prints the line to add.
 """
 
-from __future__ import annotations
-
 import os
 import unittest
 from pathlib import Path
@@ -14,7 +12,7 @@ from pathlib import Path
 from helpers import CLAUDE_TRAILER, CODEX_TRAILER, apply, commit, git, init_repo, msg, run
 from test_apply_rules import KitCase
 
-HOOK_LINE = 'python3 docs/standards/checks/trailer_check.py --message-file "$1" || exit 1'
+HOOK_LINE = 'sh docs/standards/checks/trailer_check.py --message-file "$1" || exit 1'
 
 
 class Upgrade(KitCase):

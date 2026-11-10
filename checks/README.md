@@ -2,8 +2,17 @@
 
 The three v1.0 checks (P001 Part A, "The three v1.0 checks"), the hook helpers (`secret_scan`,
 `shell_lint`, `pre_commit`), how they're wired, and the enforcement paths the merge check names.
-Standard library only; they run on Python 3.9 (stock macOS `python3`) through 3.12, and the kit's
-`scripts/check` runs the tests on both. Each script has `--help`. In a project they live in
+Standard library only, on Python 3.12 or later managed by uv (operator decision 2026-11-10; the kit's
+`scripts/check` runs the tests on 3.12; `scripts/check --full` and kit CI also on 3.13). Each script starts with a
+POSIX `sh` front: `sh <script>` looks for uv on `PATH`, then in `~/.local/bin`, `~/.cargo/bin`,
+`/opt/homebrew/bin` and `/usr/local/bin` (GUI git clients may not pass the shell's `PATH`; set
+`DEV_AI_STANDARDS_NO_UV_SEARCH=1` to skip the folders). Missing, it prints "uv is required: brew
+install uv (or see https://docs.astral.sh/uv/getting-started/installation/)" and exits 1. Then it
+unsets `UV_PYTHON` (which would override the version) and runs the file with `uv run --script`,
+whose inline metadata asks for Python 3.12 or later. uv needs a writable cache (`~/.cache/uv`, or
+`UV_CACHE_DIR`); without one the hook fails. The same file is plain
+Python, so `python <script>` also works where a 3.12 is already set up (CI). Each script has
+`--help`. In a project they live in
 `docs/standards/checks/` (kit-owned, copied by `apply`).
 
 ## Enforcement paths
@@ -17,7 +26,7 @@ merge check.
   `.gitattributes` changes how git sees files)
 - anything under a `.claude/`, `.codex/`, `.agents/` or `.githooks/` folder at any depth, and every
   script a hook calls
-- `checks/**`, `bin/**`, `scripts/check`
+- `checks/**`, `bin/**`, `scripts/check`, `scripts/setup`
 - `.github/**` (workflows, the docs-only list)
 - `docs/standards/**`
 
@@ -63,7 +72,8 @@ web-flow exemption applies.
 
 ## `rules_check.py`
 
-Run as `rules_check.py [--base REF] [--manifest FILE] [--budget BYTES] [<dir>]`. Fails when:
+Run as `rules_check.py [--base REF] [--manifest FILE] [--budget BYTES] [--branch NAME]
+[--default-branch NAME] [<dir>]`. Fails when:
 - `CLAUDE.md` has no line that is exactly `@AGENTS.md` outside fenced code and HTML comments
   (Claude Code evaluates no imports there);
 - `AGENTS.md` is over the size budget (default 24 KiB, well under Codex's 32 KiB combined chain;
@@ -75,7 +85,29 @@ Run as `rules_check.py [--base REF] [--manifest FILE] [--budget BYTES] [<dir>]`.
   missing, or isn't listed (including any file under `docs/standards/` the manifest doesn't name),
   unless the branch is a kit upgrade (below);
 - `## Overrides` appears more than once, or a line in it isn't `- <block name>: <text>` with a
-  known block name.
+  known block name;
+- a file under `.githooks/`, or `scripts/setup`, that the base commit has is deleted, emptied,
+  no longer executable (the base has mode 100755; git silently skips such a hook), or no longer
+  mentions `docs/standards/checks/` when the base's copy did (a newcomer's `scripts/setup` needs
+  them);
+- in a change to the default branch, a number placeholder (`ADR-NEW`, `OD-NEW`, `P-NEW`, also
+  `OD-NEW-1` and so on) is left where a real number lives: "assign numbers before merging". A
+  change to the default branch is a pull request whose base is it (`GITHUB_BASE_REF`), a push to it,
+  or, locally, `--branch` or the current branch being it; any other branch passes. The default
+  branch is `--default-branch`, else in GitHub Actions the workflow's `DEFAULT_BRANCH`
+  (`github.event.repository.default_branch`), else `origin/HEAD`, else whichever one of `main`
+  and `master` exists; unknown, the check is skipped with a line saying so. Scanned, tracked files
+  only: file and folder names under `docs/adr/` and `planning-docs/` (`NEW-slug.md`,
+  `P-NEW-slug.md`), the first line of each Markdown file there (the ADR title or plan header ID),
+  and decision-ID definition lines in any Markdown file (`- OD-NEW: ...`, planning add-on). Never
+  scanned: `docs/standards/**`, the fixed rule files, kit blocks, code spans, fenced code, HTML
+  comments, and text that only mentions a placeholder.
+
+It warns, without failing, when the change edits the `## People` section of `AGENTS.md`:
+"People changed: needs the owner's approval (merge by the owner listed on <default>)"; in GitHub
+Actions also as a workflow annotation on the run. People counts only from the default branch:
+`rules_check.py --people` prints Owner and Approvers from `origin/<default>:AGENTS.md` (else the
+local `<default>`), never from the working tree; agents and tools read People that way.
 
 It always prints the overrides it found. The trusted manifest is `--manifest FILE` (CI: the base
 branch's copy), else `--base REF`, else `origin/main`, then `main`. Only when no base branch exists,
@@ -86,8 +118,12 @@ A branch's edit to its own manifest therefore changes nothing, except in a kit u
 version changes kit text and the manifest together. `rules_check` then checks against the branch's
 own manifest instead of the base's only when all of these hold:
 - every changed path is in a fixed set, never read from any manifest: `docs/standards/**` (the
-  manifest included), `.claude/rules/state-file.md`, `.claude/rules/user-docs.md`, `AGENTS.md` and `CLAUDE.md`; in the last two, only text inside kit blocks and
-  the `Standards:` line changed;
+  manifest included), `.claude/rules/state-file.md`, `.claude/rules/user-docs.md`, `AGENTS.md` and
+  `CLAUDE.md`; in the last two, only text inside kit blocks and the `Standards:` line changed.
+  When a kit release changes how its scripts or hooks start (interpreter or launcher), the upgrade
+  may also change `.githooks/*` (files directly in it) and `scripts/check`, so commits keep
+  working between the two PRs; those paths pass only inside a valid upgrade, so only when the
+  `Standards:` version increases;
 - the `Standards:` line names a strictly newer version (semantic-version order) than the base's;
 - the branch's kit files and blocks match the branch's manifest.
 
@@ -97,8 +133,9 @@ Any branch whose manifest or version differs from the base's goes through this r
 kit text still matches the base manifest, so a manifest edit outside an upgrade fails. A miss fails
 with the reason (for example "kit upgrade PRs may change only docs/standards/** ... (also changed:
 ...)") plus the usual findings against the base manifest. So the rest of what `apply` writes on an
-upgrade (`.gitignore` lines, `.claude/settings.json`, hooks, `scripts/check`, new read-before
-rows) goes in its own PR, as does the changelog line.
+upgrade (`.gitignore` lines, `.claude/settings.json`, new read-before rows, and hooks and
+`scripts/check` when the release didn't change how scripts start) goes in its own PR, as does the
+changelog line.
 `dev-ai-standards drift` applies the same rule. Within the rule, a pure upgrade may rewrite or
 remove any kit file or block, the checks included, and nothing ties it to a real kit release: the
 PR review compares the kit diff with the kit's `CHANGELOG.md`.
@@ -158,20 +195,20 @@ files (setting `core.hooksPath` would switch those hooks off). Then it writes
 
 ```sh
 #!/bin/sh
-exec python3 docs/standards/checks/trailer_check.py --message-file "$1"
+exec sh docs/standards/checks/trailer_check.py --message-file "$1"
 ```
 
 ```sh
 #!/bin/sh
-exec python3 docs/standards/checks/pre_commit.py
+exec sh docs/standards/checks/pre_commit.py
 ```
 
 Otherwise it changes nothing and prints the line to add to each existing hook (in the folder it
 names):
 
 ```sh
-python3 docs/standards/checks/trailer_check.py --message-file "$1" || exit 1
-python3 docs/standards/checks/pre_commit.py || exit 1
+sh docs/standards/checks/trailer_check.py --message-file "$1" || exit 1
+sh docs/standards/checks/pre_commit.py || exit 1
 ```
 
 `pre_commit.py` takes the staged file names and never runs tests or `scripts/check`. Ruff,
@@ -183,12 +220,19 @@ project inside a commit hook); `secret_scan` on the staged diff; `shell_lint` on
 staged shell files; `rules_check` only when `docs/standards/**`, `AGENTS.md` or `CLAUDE.md` is
 staged; `state_check` as a warning.
 
+Hooks an earlier kit version wrote (`exec python3 ...`) are rewritten; a
+`python3 docs/standards/checks/` line in a project's own hook is reported, since the checks now
+need Python 3.12 through uv.
 `--dry-run` prints which case applies. Outside a git repo, or below the top of a work tree, it
-installs nothing and says so. `core.hooksPath` is local git config: each clone sets it again
-(re-run `apply`, or `git config core.hooksPath .githooks`).
+installs nothing and says so. `core.hooksPath` is local git config: each clone sets it again with
+`scripts/setup`, which `apply` writes into every project (written once, project-owned): it runs
+`docs/standards/bin/bootstrap` (Xcode Command Line Tools, git, uv), then sets `core.hooksPath
+.githooks` only when `.githooks/` holds the kit's hooks and the clone has no `core.hooksPath` and no
+hooks of its own in `.git/hooks`.
 
 **Claude Code** (project `.claude/settings.json`): `apply` merges these two `state_check` hooks in,
-leaving existing hooks alone. The path filter goes in `if`, since `matcher` tests only the tool
+leaving existing hooks alone; the `python3` form of these two commands that earlier kit versions
+wrote is removed. The path filter goes in `if`, since `matcher` tests only the tool
 name (A0 row 12).
 
 ```json
@@ -196,11 +240,11 @@ name (A0 row 12).
   "hooks": {
     "PostToolUse": [
       {"matcher": "Edit|Write", "hooks": [{"type": "command", "if": "Edit(**/CLAUDE-STATE.md)",
-        "command": "python3 \"$CLAUDE_PROJECT_DIR\"/docs/standards/checks/state_check.py --hook post-tool-use"}]}
+        "command": "sh \"$CLAUDE_PROJECT_DIR\"/docs/standards/checks/state_check.py --hook post-tool-use"}]}
     ],
     "SessionStart": [
       {"hooks": [{"type": "command",
-        "command": "python3 \"$CLAUDE_PROJECT_DIR\"/docs/standards/checks/state_check.py --hook session-start"}]}
+        "command": "sh \"$CLAUDE_PROJECT_DIR\"/docs/standards/checks/state_check.py --hook session-start"}]}
     ]
   }
 }
@@ -237,9 +281,14 @@ gives the same command):
 
 ```sh
 git fetch origin
-git show origin/main:docs/standards/bin/gate-status > "$TMPDIR/gate-status"
-python3 "$TMPDIR/gate-status" --check
+d=$(mktemp -d)
+git show origin/main:docs/standards/bin/gate-status > "$d/gate-status"
+uv run --no-project --python 3.12 python "$d/gate-status" --check
 ```
+
+Always `uv run ... python`, never `sh`: the base copy may predate the `sh` front, and `sh` would
+run its Python lines as shell commands. `--no-project` keeps uv from syncing the project's own
+environment. `mktemp -d` because `$TMPDIR` is unset on Linux.
 
 The script also re-runs the base copy itself when the copy it was started from differs; that guards
 against a stale or edited copy, not against a hostile one, which is why the command above comes

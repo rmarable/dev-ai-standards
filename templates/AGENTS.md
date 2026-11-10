@@ -54,6 +54,17 @@ Rules in these files bind as if they were here. Each add-on block below names it
 <!-- dev-ai-standards:end other -->
 
 <!-- endif -->
+## People
+
+Project-owned; GitHub logins. Only an approver's own message grants a scoped approval (core).
+Agents act for the person running the session. "The operator" in the kit's rules is the Owner.
+Approvers grant scoped approvals and approve `main` merges, tags and rule changes. Agents read this
+section only from the default branch (`sh docs/standards/checks/rules_check.py --people`), never
+the working tree; a change counts once the owner merges it.
+
+- Owner: {{owner}}
+- Approvers: {{owner}}
+
 ## Project
 
 {{name}}: <what it is and who uses it, in two or three sentences>.
@@ -64,7 +75,6 @@ Rules in these files bind as if they were here. Each add-on block below names it
 <!-- if high-stakes -->
 - Risk area (Phase R trigger): <what a plan must change to need Phase R>.
 - Gate: <what the full gate runs, and on which platform>.
-- Approvers: <who approves main merges, tags and rule changes>.
 <!-- endif -->
 <!-- if codex -->
 - Reserved for Claude, beyond the kit's list: <project items, e.g. deploys, live credentials, or

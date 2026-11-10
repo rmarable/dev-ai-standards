@@ -1,17 +1,36 @@
-#!/usr/bin/env python3
-"""shell_lint: runs ShellCheck on a project's shell files. Linting only, never tests.
+#!/bin/sh
+# /// script
+# requires-python = ">=3.12"
+# ///
+""":"
+# sh front (POSIX sh, so it runs on a stock Mac): needs uv, then runs this file as Python >= 3.12.
+# GUI git clients may not pass the shell's PATH, so uv's usual folders are tried too.
+if [ -z "${DEV_AI_STANDARDS_NO_UV_SEARCH-}" ] && ! command -v uv >/dev/null 2>&1; then
+  for d in "$HOME/.local/bin" "$HOME/.cargo/bin" /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "$d/uv" ]; then PATH="$d:$PATH"; export PATH; break; fi
+  done
+fi
+if ! command -v uv >/dev/null 2>&1; then
+  printf '%s %s\n' 'uv is required: brew install uv' \
+    '(or see https://docs.astral.sh/uv/getting-started/installation/)' >&2
+  exit 1
+fi
+# A user-level UV_PYTHON would override requires-python above.
+unset UV_PYTHON
+exec uv run --script "$0" "$@"
+":
+shell_lint: runs ShellCheck on a project's shell files. Linting only, never tests.
 
 Shell files: `*.sh`, `*.bash`, `*.zsh`, plus files whose first line is a shell shebang
 (`#!/bin/sh`, `#!/bin/bash`, `#!/usr/bin/env bash`, `#!/usr/bin/env -S bash`; `sh`, `bash`,
 `dash`, `ksh` or `zsh`). `--all` lists them with git (tracked and untracked, not ignored), so a
 local run sees what CI sees (F1-13); outside a git repo it walks the tree, skipping `.git/`,
 `node_modules/` and `.venv/`. ShellCheck has no zsh support, so zsh files get a parse-only
-`zsh -n` check instead (syntax only; operator decisions 2026-11-10, G4 and F1-5). Without
+`zsh -n` check instead (syntax only; operator decisions 2026-11-10, G4 and F1-5). A Python file
+with the kit's sh front (`has_py_front`) is Python, not shell. Without
 `shellcheck` it prints "shellcheck not found: skipped" and passes, unless --require (CI) makes
 that a failure.
 """
-
-from __future__ import annotations
 
 import argparse
 import re
@@ -28,15 +47,35 @@ SUFFIXES = {".sh": "sh", ".bash": "bash", ".zsh": "zsh"}
 SKIP_LINE = "shellcheck not found: skipped"
 
 
-def shell_of(path: Path) -> str | None:
-    """The shell a file is written for (`sh`, `bash`, `dash`, `ksh`, `zsh`), or None. A shebang
-    wins over the suffix, so a `.sh` file run by zsh counts as zsh (F2-2)."""
+# The kit's sh front: a POSIX sh preamble inside a Python string, so one file runs as `sh FILE`
+# (checks for uv, then `uv run --script`) and as `python FILE`.
+PY_FRONT = '""":"'
+
+
+def head_lines(path: Path, n: int = 8) -> list[str]:
     try:
         with path.open("rb") as f:
-            first = f.readline(200)
+            raw = f.read(1024)
     except OSError:
-        first = b""
-    m = SHEBANG_RE.match(first.decode("utf-8", "replace"))
+        return []
+    return raw.decode("utf-8", "replace").splitlines()[:n]
+
+
+def has_py_front(path: Path) -> bool:
+    """True for a Python file that starts with the kit's sh front."""
+    lines = head_lines(path)
+    return bool(lines) and lines[0].startswith("#!") and PY_FRONT in lines
+
+
+def shell_of(path: Path) -> str | None:
+    """The shell a file is written for (`sh`, `bash`, `dash`, `ksh`, `zsh`), or None. A shebang
+    wins over the suffix, so a `.sh` file run by zsh counts as zsh (F2-2). A file with the kit's
+    sh front is Python: None."""
+    if has_py_front(path):
+        return None
+    lines = head_lines(path, 1)
+    first = lines[0] if lines else ""
+    m = SHEBANG_RE.match(first)
     if m:
         return m.group(1)
     return SUFFIXES.get(path.suffix)

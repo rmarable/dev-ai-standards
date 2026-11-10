@@ -24,6 +24,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # The checks below come from the base commit and run as `python <file>`: that works for the
+      # kit's sh-front files (valid Python 3.12) and for older bases' plain Python files alike.
+      # `sh <file>` would need uv and fail on an older base.
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0 (released 2026-10-22)
         with:
@@ -103,7 +106,10 @@ jobs:
 
       - name: rules_check
         # --base: the same trusted base commit; also what a kit upgrade is compared with
-        # (checks/README.md, "Kit upgrades").
+        # (checks/README.md, "Kit upgrades"). DEFAULT_BRANCH: placeholders fail in a pull request
+        # into it or a push to it (an environment variable, so an older base copy ignores it).
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -eu
           python "$BASE_STANDARDS/checks/rules_check.py" --manifest "$BASE_STANDARDS/manifest" \

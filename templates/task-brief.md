@@ -40,7 +40,8 @@ checkout; Claude's local state. Project items: <from `AGENTS.md` "Project", or "
 ## Plan and IDs
 
 - Plan: `<planning-docs path>`, step <n>.
-- New numbers are placeholders: `OD-NEW`, `ADR-NEW`, `P-NEW` (several: `-NEW-1`, `-NEW-2`).
+- New numbers are placeholders: `OD-NEW`, `ADR-NEW`, `P-NEW` (several: `-NEW-1`, `-NEW-2`);
+  real numbers are assigned when merging to `main`.
   Record decisions in your edits (ADR or spec entry), never only in chat. Notes go in the plan
   doc, never in its Decisions or approval lines.
 

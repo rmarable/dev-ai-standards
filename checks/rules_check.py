@@ -1,15 +1,34 @@
-#!/usr/bin/env python3
-"""rules_check: checks a project's agent rule files against the dev-ai-standards kit.
+#!/bin/sh
+# /// script
+# requires-python = ">=3.12"
+# ///
+""":"
+# sh front (POSIX sh, so it runs on a stock Mac): needs uv, then runs this file as Python >= 3.12.
+# GUI git clients may not pass the shell's PATH, so uv's usual folders are tried too.
+if [ -z "${DEV_AI_STANDARDS_NO_UV_SEARCH-}" ] && ! command -v uv >/dev/null 2>&1; then
+  for d in "$HOME/.local/bin" "$HOME/.cargo/bin" /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "$d/uv" ]; then PATH="$d:$PATH"; export PATH; break; fi
+  done
+fi
+if ! command -v uv >/dev/null 2>&1; then
+  printf '%s %s\n' 'uv is required: brew install uv' \
+    '(or see https://docs.astral.sh/uv/getting-started/installation/)' >&2
+  exit 1
+fi
+# A user-level UV_PYTHON would override requires-python above.
+unset UV_PYTHON
+exec uv run --script "$0" "$@"
+":
+rules_check: checks a project's agent rule files against the dev-ai-standards kit.
 
 Implements P001 Part A, "The three v1.0 checks" (2) and "Kit-owned and project-owned text".
 Also the shared helpers (blocks, hashing, manifest) that `bin/dev-ai-standards` imports, and
 the kit-upgrade rule (operator decision 2026-11-10): see `checks/README.md`, "Kit upgrades".
 """
 
-from __future__ import annotations
-
 import argparse
 import hashlib
+import os
 import re
 import subprocess
 import sys
@@ -235,8 +254,14 @@ STANDARDS_LINE_RE = re.compile(r"(?m)^Standards: dev-ai-standards v(\S+) \(.*\)[
 VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?")
 UPGRADE_SCOPE_MSG = (
     "kit upgrade PRs may change only docs/standards/**, .claude/rules/state-file.md,"
-    " .claude/rules/user-docs.md, and kit blocks and the Standards line in AGENTS.md and CLAUDE.md"
+    " .claude/rules/user-docs.md, kit blocks and the Standards line in AGENTS.md and CLAUDE.md,"
+    " and .githooks/* and scripts/check (when the kit changes how its scripts start)"
 )
+# Files that start the kit's scripts (hooks, scripts/check). A kit release that changes how its
+# scripts start (interpreter or launcher) must change them in the same PR, or commits break
+# between two PRs (U1-1). Allowed only inside a valid upgrade, so only with a newer version.
+LAUNCHER_DIR = ".githooks"
+LAUNCHER_FILES = ("scripts/check",)
 
 
 def standards_version(text: str) -> str | None:
@@ -283,9 +308,22 @@ def resolve_base(root: Path, base: str | None) -> str | None:
     return next((r for r in BASE_CANDIDATES if ref_exists(root, r)), None)
 
 
+def is_launcher_path(path: str) -> bool:
+    """A file directly in .githooks/, or scripts/check."""
+    head, _, name = path.rpartition("/")
+    return path in LAUNCHER_FILES or (head == LAUNCHER_DIR and bool(name))
+
+
 def in_upgrade_set(path: str) -> bool:
-    """The fixed set a pure upgrade may touch; never derived from any manifest (K1-2, F1-9)."""
-    return path.startswith(STANDARDS_DIR + "/") or path in BLOCK_FILES or path in FIXED_RULES
+    """The fixed set a pure upgrade may touch; never derived from any manifest (K1-2, F1-9).
+
+    Launcher paths count only because upgrade_check also demands a strictly newer version."""
+    return (
+        path.startswith(STANDARDS_DIR + "/")
+        or path in BLOCK_FILES
+        or path in FIXED_RULES
+        or is_launcher_path(path)
+    )
 
 
 def upgrade_check(  # noqa: PLR0912 (one linear command flow)
@@ -294,8 +332,9 @@ def upgrade_check(  # noqa: PLR0912 (one linear command flow)
     """Decide whether this branch is a kit upgrade that may use its own manifest.
 
     Returns (True, [info]) when every condition holds, else (False, [reasons]). Conditions:
-    every changed path is under docs/standards/ (the manifest included) or is AGENTS.md or
-    CLAUDE.md, and in those two only kit block text and the Standards line changed; the
+    every changed path is under docs/standards/ (the manifest included), a fixed rule, a file in
+    .githooks/, scripts/check, or AGENTS.md or CLAUDE.md, and in those two only kit block text
+    and the Standards line changed; the
     Standards line names a strictly newer version than the base's; the head's kit files and
     blocks match the head's manifest (whose keys parse_manifest has already limited).
     """
@@ -503,12 +542,282 @@ def missing_kit_rows(text: str, manifest: dict[str, str]) -> list[str]:
     return [p for p in KIT_READ_BEFORE if p in manifest and p not in have]
 
 
-def run_checks(
-    root: Path, budget: int, base: str | None, manifest_file: str | None
+# Multi-user readiness (operator decision 2026-11-10). A newcomer's setup needs these, so a change
+# that deletes, empties or disables one fails: every file under .githooks/ and scripts/setup that
+# the base commit has. Disabling covers the executable bit (git skips a hook without it) and
+# dropping the kit check calls the base's copy makes (U1-8).
+SETUP_PATHS = (".githooks", "scripts/setup")
+SETUP_MARK = "docs/standards/checks/"
+EXEC_MODE = "100755"
+# Numbering: on a branch everyone writes ADR-NEW, OD-NEW or P-NEW (several: OD-NEW-1); the real
+# number is assigned before merging into the default branch. Only places that hold a real number
+# are scanned (U1-3): ADR file names and first lines, plan file names and header lines, and
+# decision-ID definition lines (planning add-on). Text that only mentions the convention passes.
+PLACEHOLDER_RE = re.compile(r"(?<![A-Za-z0-9])(?:ADR|OD|P)-NEW(?:-\d+)?(?![A-Za-z0-9])")
+# A file or folder name holding a placeholder number: NEW-slug.md, ADR-NEW-slug.md, P-NEW-slug.
+NEW_NAME_RE = re.compile(r"(?:(?:ADR|OD|P)-)?NEW(?:-\d+)?(?=[-_.]|$)")
+# A decision-ID definition line: the ID, then a colon, at the start of a line, list item or
+# heading (planning add-on, "Numbers").
+DEFINITION_RE = re.compile(
+    r"\s{0,3}(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)?(?:\*\*|__)?"
+    r"((?:ADR|OD|P)-NEW(?:-\d+)?)(?:\*\*|__)?\s*:"
+)
+ADR_DIR = "docs/adr/"
+PLAN_DIR = "planning-docs/"
+MARKDOWN_EXTS = (".md", ".markdown", ".mdx")
+CODE_SPAN_RE = re.compile(r"(`+).*?(?<!`)\1(?!`)")
+DEFAULT_FALLBACKS = ("main", "master")
+MAX_SCAN_BYTES = 2 * 1024 * 1024
+MAX_SHOWN = 20
+PEOPLE_HEADING = "## People"
+PEOPLE_RE = re.compile(r"\s*[-*]\s+(Owner|Approvers)\s*:\s*(.*)")
+
+
+def setup_removals(root: Path, base: str | None) -> list[str]:
+    """Failures for .githooks/* and scripts/setup files the base has that are now gone, empty,
+    no longer executable, or no longer call the kit checks."""
+    ref = resolve_base(root, base)
+    if ref is None:
+        return []
+    r = git(root, "ls-tree", "-r", "-z", ref, "--", *SETUP_PATHS, check=False)
+    out: list[str] = []
+    entries: list[tuple[str, str]] = []
+    for item in r.stdout.split("\0"):
+        meta, tab, rel = item.partition("\t")
+        if tab:
+            entries.append((rel, meta.split(" ", 1)[0]))
+    for rel, mode in sorted(entries):
+        p = root / rel
+        why = "newcomers' setup needs it; restore it"
+        if not p.is_file():
+            out.append(f"{rel} deleted ({why})")
+            continue
+        data = p.read_bytes()
+        if not data.strip():
+            out.append(f"{rel} emptied ({why})")
+            continue
+        if mode == EXEC_MODE and not os.access(p, os.X_OK):
+            out.append(f"{rel} is no longer executable (git skips it; restore it: chmod +x {rel})")
+        old = show_file(root, ref, rel)
+        if old is not None and SETUP_MARK in old and SETUP_MARK.encode() not in data:
+            out.append(f"{rel} no longer calls {SETUP_MARK} as the base's copy does ({why})")
+    return out
+
+
+def default_branch(root: Path, given: str | None) -> str | None:
+    """The repository's default branch: --default-branch; in GitHub Actions the workflow's
+    DEFAULT_BRANCH (github.event.repository.default_branch); else origin/HEAD; else the one
+    local branch of main and master that exists. None when unknown."""
+    if given:
+        return given
+    if os.environ.get("GITHUB_EVENT_NAME") and os.environ.get("DEFAULT_BRANCH", "").strip():
+        return os.environ["DEFAULT_BRANCH"].strip()
+    r = git(root, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD", check=False)
+    name = r.stdout.strip()
+    if r.returncode == 0 and name.startswith("origin/"):
+        return name.removeprefix("origin/")
+    found = [b for b in DEFAULT_FALLBACKS if ref_exists(root, f"refs/heads/{b}")]
+    return found[0] if len(found) == 1 else None
+
+
+def merge_target(root: Path, branch: str | None) -> str | None:
+    """The branch the checked state is in or is going into: --branch; in GitHub Actions a pull
+    request's base branch, or the pushed branch; else git's current branch. None when detached,
+    or for other CI events."""
+    if branch:
+        return branch
+    event = os.environ.get("GITHUB_EVENT_NAME")
+    if event:
+        if event.startswith("pull_request"):
+            return os.environ.get("GITHUB_BASE_REF", "").strip() or None
+        ref = os.environ.get("GITHUB_REF", "")
+        if event == "push" and ref.startswith("refs/heads/"):
+            return ref.removeprefix("refs/heads/")
+        return None
+    r = git(root, "symbolic-ref", "--short", "-q", "HEAD", check=False)
+    return r.stdout.strip() or None
+
+
+def scannable_text(rel: str, text: str) -> str:
+    """Markdown text with what is only quotation removed: kit blocks, fenced code, HTML comments
+    and code spans of any backtick count. Line numbers are kept."""
+    if rel in BLOCK_FILES:
+        for _, start, _, _, end in reversed(parse_blocks(text)):
+            text = text[:start] + "\n" * text.count("\n", start, end) + text[end:]
+    text = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group().count("\n"), text, flags=re.DOTALL)
+    lines = text.split("\n")
+    fence: str | None = None
+    for i, ln in enumerate(lines):
+        m = re.match(r"\s{0,3}(`{3,}|~{3,})", ln)
+        if fence is None and m:
+            fence, lines[i] = m.group(1), ""
+        elif fence is not None:
+            if ln.strip().startswith(fence) and not ln.strip().strip(fence[0]):
+                fence = None
+            lines[i] = ""
+    return "\n".join(CODE_SPAN_RE.sub("", ln) for ln in lines)
+
+
+def numbered_dir(rel: str) -> str | None:
+    """ADR_DIR or PLAN_DIR when `rel` is under one of them (where file names carry numbers)."""
+    return next((d for d in (ADR_DIR, PLAN_DIR) if rel.startswith(d)), None)
+
+
+def file_placeholders(root: Path, rel: str) -> list[str]:
+    """Placeholder hits in one tracked file: its name (ADR and plan files), its first line (ADR
+    and plan files), and decision-ID definition lines (Markdown)."""
+    hits: list[str] = []
+    where = numbered_dir(rel)
+    if where:
+        for part in rel.removeprefix(where).split("/"):
+            m = NEW_NAME_RE.match(part) or PLACEHOLDER_RE.search(part)
+            if m:
+                hits.append(f"{rel}: {m.group()} in the file name")
+                break
+    p = root / rel
+    if not rel.lower().endswith(MARKDOWN_EXTS) or not p.is_file():
+        return hits
+    if p.stat().st_size > MAX_SCAN_BYTES:
+        return hits
+    raw = p.read_text(encoding="utf-8", errors="replace")
+    try:
+        text = scannable_text(rel, raw)
+    except CheckError:
+        text = scannable_text(rel + ".unparsed", raw)
+    lines = text.split("\n")
+    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    for n, ln in enumerate(lines):
+        m = DEFINITION_RE.match(ln)
+        if where and n == first:
+            hits.extend(
+                f"{rel}:{n + 1}: {h.group()} in the ID line" for h in PLACEHOLDER_RE.finditer(ln)
+            )
+        elif m:
+            hits.append(f"{rel}:{n + 1}: {m.group(1)} defined")
+    return hits
+
+
+def placeholder_failures(
+    root: Path, branch: str | None, default: str | None
 ) -> tuple[list[str], list[str]]:
-    """Return (failures, info lines)."""
-    failures: list[str] = []
-    info: list[str] = []
+    """(failures, info) for number placeholders left in a change to the default branch: a pull
+    request into it, a push to it, or a local check on it. Other branches pass. Tracked files
+    only; kit copies (docs/standards/, the fixed rules, kit blocks) are skipped."""
+    if default is None:
+        return [], ["placeholder check skipped: default branch unknown (pass --default-branch)"]
+    if merge_target(root, branch) != default:
+        return [], []
+    r = git(root, "ls-files", "-z", "--cached", check=False)
+    hits: list[str] = []
+    for rel in sorted({n for n in r.stdout.split("\0") if n}):
+        if rel.startswith(STANDARDS_DIR + "/") or rel in FIXED_RULES:
+            continue
+        hits.extend(file_placeholders(root, rel))
+    if not hits:
+        return [], []
+    shown = hits[:MAX_SHOWN] + (
+        [f"and {len(hits) - MAX_SHOWN} more"] if len(hits) > MAX_SHOWN else []
+    )
+    return [
+        f"{len(hits)} number placeholder(s) in a change to {default}: assign numbers before"
+        " merging (planning add-on):",
+        *(f"  {h}" for h in shown),
+    ], []
+
+
+def people_section(text: str) -> str | None:
+    """The '## People' section of AGENTS.md text (heading excluded), or None."""
+    lines = text.splitlines()
+    start = next((i for i, ln in enumerate(lines) if ln.rstrip() == PEOPLE_HEADING), None)
+    if start is None:
+        return None
+    body: list[str] = []
+    for ln in lines[start + 1 :]:
+        if ln.startswith("# ") or ln.startswith("## "):
+            break
+        body.append(ln.rstrip())
+    return "\n".join(body).strip("\n")
+
+
+def parse_people(section: str) -> dict[str, list[str]]:
+    """Owner and Approvers from a People section: GitHub logins, '@' and backticks dropped."""
+    found: dict[str, list[str]] = {"Owner": [], "Approvers": []}
+    for ln in section.splitlines():
+        m = PEOPLE_RE.fullmatch(ln)
+        if m:
+            names = [n.strip().strip("`").lstrip("@") for n in m.group(2).split(",")]
+            found[m.group(1)].extend(n for n in names if n)
+    return found
+
+
+def people_ref(root: Path, default: str | None) -> str | None:
+    """origin/<default>, else <default>: the only copies whose People count."""
+    if default is None:
+        return None
+    return next((r for r in (f"origin/{default}", default) if ref_exists(root, r)), None)
+
+
+def people_changed(root: Path, base: str | None, default: str | None) -> list[str]:
+    """A warning when this change edits the People section of AGENTS.md (U1-4). Never fails:
+    the change takes effect only once merged, and the owner's approval is a human check."""
+    ref = resolve_base(root, base)
+    agents = root / "AGENTS.md"
+    if ref is None or not agents.is_file():
+        return []
+    mb = git(root, "merge-base", ref, "HEAD", check=False)
+    since = mb.stdout.strip() if mb.returncode == 0 and mb.stdout.strip() else ref
+    old = show_file(root, since, "AGENTS.md")
+    if old is None or people_section(old) == people_section(agents.read_text()):
+        return []
+    return [
+        "People changed: needs the owner's approval (merge by the owner listed on"
+        f" {default or 'the default branch'})"
+    ]
+
+
+def repo_checks(
+    root: Path, base: str | None, branch: str | None, default: str | None
+) -> tuple[list[str], list[str], list[str]]:
+    """(failures, warnings, info): setup files kept, placeholders, People changes (repos only)."""
+    if not is_git_repo(root):
+        return [], [], []
+    default = default_branch(root, default)
+    fails, info = placeholder_failures(root, branch, default)
+    return [*setup_removals(root, base), *fails], people_changed(root, base, default), info
+
+
+def show_people(root: Path, default: str | None) -> int:
+    """Print Owner and Approvers from the default branch's AGENTS.md, never the working tree."""
+    if not is_git_repo(root):
+        print("rules_check: error: --people needs a git repo", file=sys.stderr)
+        return 2
+    ref = people_ref(root, default_branch(root, default))
+    text = show_file(root, ref, "AGENTS.md") if ref else None
+    section = people_section(text) if text is not None else None
+    if section is None:
+        print(
+            "rules_check: error: no People section on the default branch"
+            f" ({ref or 'default branch unknown: pass --default-branch'})",
+            file=sys.stderr,
+        )
+        return 1
+    found = parse_people(section)
+    print(f"rules_check: People from {ref}:AGENTS.md (the working tree never counts)")
+    print(f"Owner: {', '.join(found['Owner']) or '(none)'}")
+    print(f"Approvers: {', '.join(found['Approvers']) or '(none)'}")
+    return 0
+
+
+def run_checks(
+    root: Path,
+    budget: int,
+    base: str | None,
+    manifest_file: str | None,
+    branch: str | None = None,
+    default: str | None = None,
+) -> tuple[list[str], list[str], list[str]]:
+    """Return (failures, warnings, info lines). Warnings never fail the run."""
+    failures, warnings, info = repo_checks(root, base, branch, default)
     agents = root / "AGENTS.md"
     claude = root / "CLAUDE.md"
     if not claude.is_file():
@@ -517,7 +826,7 @@ def run_checks(
         failures.append("CLAUDE.md does not import AGENTS.md (no '@AGENTS.md' line)")
     if not agents.is_file():
         failures.append("AGENTS.md missing")
-        return failures, info
+        return failures, warnings, info
     text = agents.read_text()
     size = len(agents.read_bytes())
     if size > budget:
@@ -560,7 +869,7 @@ def run_checks(
         info.extend(f"  - {b}: {t}" for b, t in found)
     else:
         info.append("no overrides")
-    return failures, info
+    return failures, warnings, info
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -580,6 +889,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--manifest", help="read the trusted manifest from this file instead")
     ap.add_argument(
+        "--branch",
+        help=(
+            "branch the change is in or goes into, for the placeholder check (default: in GitHub"
+            " Actions a pull request's base branch or the pushed branch; else git's current"
+            " branch)"
+        ),
+    )
+    ap.add_argument(
+        "--default-branch",
+        help=(
+            "the repository's default branch (default: in GitHub Actions the DEFAULT_BRANCH"
+            " variable; else origin/HEAD; else main or master, whichever exists)"
+        ),
+    )
+    ap.add_argument(
+        "--people",
+        action="store_true",
+        help="print Owner and Approvers from the default branch's AGENTS.md, then exit",
+    )
+    ap.add_argument(
         "--budget",
         type=int,
         default=DEFAULT_BUDGET,
@@ -588,12 +917,21 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     root = Path(args.dir).resolve()
     try:
-        failures, info = run_checks(root, args.budget, args.base, args.manifest)
+        if args.people:
+            return show_people(root, args.default_branch)
+        failures, warnings, info = run_checks(
+            root, args.budget, args.base, args.manifest, args.branch, args.default_branch
+        )
     except (CheckError, OSError, subprocess.CalledProcessError) as e:
         print(f"rules_check: error: {e}", file=sys.stderr)
         return 2
     for line in info:
         print(f"rules_check: {line}")
+    for w in warnings:
+        print(f"rules_check: WARN {w}")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            # A workflow annotation: shown on the run and the pull request, not only in the log.
+            print(f"::warning title=rules-check::{w}")
     for f in failures:
         print(f"rules_check: FAIL {f}")
     if failures:

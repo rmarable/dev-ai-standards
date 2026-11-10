@@ -5,8 +5,6 @@ head; refuses a PR that renames a script under a docs path, and one that widens 
 list (the base branch's list decides). Offline: a fake `gh`, a local bare `origin`, --dry-run.
 """
 
-from __future__ import annotations
-
 import tempfile
 import unittest
 from pathlib import Path

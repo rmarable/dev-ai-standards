@@ -1,11 +1,29 @@
-#!/usr/bin/env python3
-"""trailer_check: exactly one allowed co-author trailer per commit.
+#!/bin/sh
+# /// script
+# requires-python = ">=3.12"
+# ///
+""":"
+# sh front (POSIX sh, so it runs on a stock Mac): needs uv, then runs this file as Python >= 3.12.
+# GUI git clients may not pass the shell's PATH, so uv's usual folders are tried too.
+if [ -z "${DEV_AI_STANDARDS_NO_UV_SEARCH-}" ] && ! command -v uv >/dev/null 2>&1; then
+  for d in "$HOME/.local/bin" "$HOME/.cargo/bin" /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "$d/uv" ]; then PATH="$d:$PATH"; export PATH; break; fi
+  done
+fi
+if ! command -v uv >/dev/null 2>&1; then
+  printf '%s %s\n' 'uv is required: brew install uv' \
+    '(or see https://docs.astral.sh/uv/getting-started/installation/)' >&2
+  exit 1
+fi
+# A user-level UV_PYTHON would override requires-python above.
+unset UV_PYTHON
+exec uv run --script "$0" "$@"
+":
+trailer_check: exactly one allowed co-author trailer per commit.
 
 Implements P001 Part A, "The three v1.0 checks" (1): a commit-msg hook over one message, and
 CI over a range or a push (`before..after`), with the Dependabot, web-flow and root exemptions.
 """
-
-from __future__ import annotations
 
 import argparse
 import json
@@ -14,8 +32,8 @@ import re
 import subprocess
 import sys
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 ALLOWED = (
     "Co-Authored-By: Claude <noreply@anthropic.com>",
@@ -26,8 +44,8 @@ ZERO = "0" * 40
 SCISSORS = "# ------------------------ >8 ------------------------"
 CO_RE = re.compile(r"^\s*co-authored-by\s*:", re.IGNORECASE)
 
-Meta = dict[str, object]
-MetaLookup = Callable[[str], "Meta | None"]
+type Meta = dict[str, object]
+type MetaLookup = Callable[[str], Meta | None]
 
 
 def clean_message(msg: str, strip_comments: bool) -> str:

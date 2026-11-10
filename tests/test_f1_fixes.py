@@ -6,8 +6,6 @@ holds the rest: the renamed state template (F1-3), the secret-scan diff parser (
 shell files (F1-13), and the python test workflow (G5). Fake keys are built at runtime.
 """
 
-from __future__ import annotations
-
 import os
 import re
 import subprocess
@@ -343,12 +341,13 @@ class WorkflowText(KitCase):
         text = (OUT / ".github/workflows/kit-ci.yml").read_text()
         self.check_common(text)
         self.assertNotIn("paths-ignore", text)
-        self.assertIn('python: ["3.9", "3.12"]', text)
-        self.assertIn("actions/setup-python@", text)
+        self.assertIn('python: ["3.12", "3.13"]', text)
+        self.assertNotIn("3.9", text)
+        self.assertNotIn("actions/setup-python@", text)
         self.assertIn("astral-sh/setup-uv@", text)
         self.assertIn("apt-get install -y -q shellcheck", text)
         self.assertIn("FAIL could not install shellcheck", text)
-        self.assertIn("run: python ./scripts/check", text)
+        self.assertIn('run: sh ./scripts/check --python "${{ matrix.python }}"', text)
 
 
 class TrailerApiUrl(KitCase):

@@ -11,8 +11,8 @@ them in the repository, where both Claude Code and Codex can read them.
 ## Decision
 
 - Each significant decision is an ADR in `docs/adr/NNNN-<slug>.md`: Status, Date, Context,
-  Decision, Consequences, and Rejected where alternatives were weighed. Numbers are never reused;
-  Codex writes `ADR-NEW`, and Claude assigns the number at merge.
+  Decision, Consequences, and Rejected where alternatives were weighed. Numbers are never reused.
+  On a branch everyone writes `ADR-NEW`; the real number is assigned when merging to `main`.
 - A small decision that doesn't justify an ADR (a default value, a name) is a dated "operator
   decision" line in the spec section it changes. Either way, the commit message names it.
 - An ADR is not edited after it is accepted, except its Status line; a later ADR supersedes it and

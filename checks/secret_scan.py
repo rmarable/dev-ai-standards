@@ -1,13 +1,31 @@
-#!/usr/bin/env python3
-"""secret_scan: looks for credential-shaped strings in the lines a change adds.
+#!/bin/sh
+# /// script
+# requires-python = ">=3.12"
+# ///
+""":"
+# sh front (POSIX sh, so it runs on a stock Mac): needs uv, then runs this file as Python >= 3.12.
+# GUI git clients may not pass the shell's PATH, so uv's usual folders are tried too.
+if [ -z "${DEV_AI_STANDARDS_NO_UV_SEARCH-}" ] && ! command -v uv >/dev/null 2>&1; then
+  for d in "$HOME/.local/bin" "$HOME/.cargo/bin" /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "$d/uv" ]; then PATH="$d:$PATH"; export PATH; break; fi
+  done
+fi
+if ! command -v uv >/dev/null 2>&1; then
+  printf '%s %s\n' 'uv is required: brew install uv' \
+    '(or see https://docs.astral.sh/uv/getting-started/installation/)' >&2
+  exit 1
+fi
+# A user-level UV_PYTHON would override requires-python above.
+unset UV_PYTHON
+exec uv run --script "$0" "$@"
+":
+secret_scan: looks for credential-shaped strings in the lines a change adds.
 
 A tripwire, not a guarantee: it knows a handful of well-known token shapes and nothing else.
 It prints the file, line and kind of each hit, never the matched text. Used by the pre-commit
 hook (`checks/pre_commit.py`) and run by hand before committing Codex work with hooks off
 (Codex add-on, Claude's pick-up). Operator decision 2026-11-10 (G3).
 """
-
-from __future__ import annotations
 
 import argparse
 import re

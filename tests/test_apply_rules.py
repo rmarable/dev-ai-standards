@@ -6,8 +6,6 @@ not in project text; overrides are listed; a branch's manifest edit changes noth
 placeholders, CLAUDE.md blocks, status names).
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import re

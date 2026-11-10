@@ -1,16 +1,36 @@
-#!/usr/bin/env python3
-"""scripts/check: runs exactly what the kit's CI runs.
+#!/bin/sh
+# /// script
+# requires-python = ">=3.12"
+# ///
+""":"
+# sh front (POSIX sh, so it runs on a stock Mac): needs uv, then runs this file as Python >= 3.12.
+# GUI git clients may not pass the shell's PATH, so uv's usual folders are tried too.
+if [ -z "${DEV_AI_STANDARDS_NO_UV_SEARCH-}" ] && ! command -v uv >/dev/null 2>&1; then
+  for d in "$HOME/.local/bin" "$HOME/.cargo/bin" /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "$d/uv" ]; then PATH="$d:$PATH"; export PATH; break; fi
+  done
+fi
+if ! command -v uv >/dev/null 2>&1; then
+  printf '%s %s\n' 'uv is required: brew install uv' \
+    '(or see https://docs.astral.sh/uv/getting-started/installation/)' >&2
+  exit 1
+fi
+# A user-level UV_PYTHON would override requires-python above.
+unset UV_PYTHON
+exec uv run --script "$0" "$@"
+":
+scripts/check: runs exactly what the kit's CI runs.
 
 Implements P001 Part A core ("`scripts/check [--full]` runs exactly what CI runs") and the kit
-CI cap on `core.md` (`wc -w core.md` <= 600). For the kit, --full runs the same steps. Also Ruff
-through `uvx` (G2), ShellCheck on the kit's shell files (G4), and the tests under
-`/usr/bin/python3` as well, when it exists, since kit scripts must run on Python 3.9 (K1-14).
-Missing tools print a visible "skipped" line, never a silent pass.
+CI cap on `core.md` (`wc -w core.md` <= 600). Also Ruff through `uvx` (G2), ShellCheck on the
+kit's shell files (G4), and the unit tests on uv-managed Python 3.12; `--full` adds 3.13 (operator
+decisions 2026-11-10: uv required, Python 3.9 dropped; 3.13 only under --full). `--python X`
+(repeatable) picks the versions instead, as kit CI's matrix does. Missing optional tools print a
+visible "skipped" line, never a silent pass; missing uv fails.
 """
 
-from __future__ import annotations
-
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -19,6 +39,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CORE_CAP = 600
 SCRIPTS = (
+    "bin/bootstrap",
     "bin/dev-ai-standards",
     "bin/gate-status",
     "bin/new-claude-project",
@@ -31,7 +52,11 @@ SCRIPTS = (
     "scripts/check",
 )
 RUFF_PATHS = ("bin", "checks", "scripts", "tests")
-SYSTEM_PYTHON = Path("/usr/bin/python3")
+DEFAULT_PYTHON = "3.12"
+FULL_PYTHONS = ("3.12", "3.13")
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / "checks"))
+import shell_lint  # noqa: E402 (path set just above)
 
 
 def step(name: str, ok: bool, detail: str = "") -> bool:
@@ -58,7 +83,7 @@ def compile_scripts() -> bool:
             ok = step(f"compile {rel}", False, "missing") and ok
             continue
         src = p.read_text()
-        if "python" not in (src.splitlines() or [""])[0]:
+        if not is_python(p):
             r = subprocess.run(["sh", "-n", str(p)], capture_output=True, text=True, check=False)
             if r.returncode != 0:
                 ok = step(f"sh -n {rel}", False, r.stderr.strip()[:200]) and ok
@@ -70,15 +95,21 @@ def compile_scripts() -> bool:
     return step("scripts compile", ok) if ok else False
 
 
+def is_python(p: Path) -> bool:
+    """A .py file, an extensionless tool with the kit's sh front, or a python shebang."""
+    if p.suffix == ".py" or shell_lint.has_py_front(p):
+        return True
+    first = (p.read_text(errors="replace").splitlines() or [""])[0]
+    return not p.suffix and first.startswith("#!") and "python" in first
+
+
 def ruff_files() -> list[str]:
     """Kit Python files for Ruff: *.py, plus the extensionless bin/ and scripts/ tools."""
     out: list[str] = []
     for d in RUFF_PATHS:
         for p in sorted((ROOT / d).rglob("*")):
-            if p.is_file() and "__pycache__" not in p.parts:
-                first = (p.read_text(errors="replace").splitlines() or [""])[0]
-                if p.suffix == ".py" or (not p.suffix and "python" in first):
-                    out.append(p.relative_to(ROOT).as_posix())
+            if p.is_file() and "__pycache__" not in p.parts and is_python(p):
+                out.append(p.relative_to(ROOT).as_posix())
     return out
 
 
@@ -95,10 +126,6 @@ def ruff() -> bool:
 
 
 def shellcheck() -> bool:
-    sys.dont_write_bytecode = True
-    sys.path.insert(0, str(ROOT / "checks"))
-    import shell_lint  # noqa: PLC0415 (path set just above)
-
     files = shell_lint.all_shell_files(ROOT)
     if shutil.which("shellcheck") is None:
         print(f"check: skipped: {shell_lint.SKIP_LINE} ({len(files)} file(s))")
@@ -106,18 +133,42 @@ def shellcheck() -> bool:
     return step(f"shellcheck ({len(files)} file(s))", shell_lint.run_shellcheck(ROOT, files) == 0)
 
 
-def unit_tests() -> bool:
+def clean_env() -> dict[str, str]:
+    """This environment without the virtual env `uv run --script` set for this script."""
+    return {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+
+
+def pythons(wanted: list[str] | None, full: bool) -> list[str]:
+    """Versions for the unit tests: `--python` values, else 3.12, or 3.12 and 3.13 with --full
+    (uv fetches a missing one)."""
+    if wanted:
+        return wanted
+    return list(FULL_PYTHONS) if full else [DEFAULT_PYTHON]
+
+
+def unit_tests(wanted: list[str] | None, full: bool) -> bool:
+    if shutil.which("uv") is None:
+        return step("unit tests", False, "uv not found (brew install uv)")
     ok = True
-    pythons = [sys.executable]
-    if SYSTEM_PYTHON.is_file() and SYSTEM_PYTHON.resolve() != Path(sys.executable).resolve():
-        pythons.append(str(SYSTEM_PYTHON))
-    else:
-        print(f"check: skipped: {SYSTEM_PYTHON} not found or same as this Python (3.9 test run)")
-    for py in pythons:
+    for v in pythons(wanted, full):
         r = subprocess.run(
-            [py, "-m", "unittest", "discover", "-s", str(ROOT / "tests")], check=False
+            [
+                "uv",
+                "run",
+                "--no-project",
+                "--python",
+                v,
+                "python",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                str(ROOT / "tests"),
+            ],
+            env=clean_env(),
+            check=False,
         )
-        ok = step(f"unit tests ({py})", r.returncode == 0) and ok
+        ok = step(f"unit tests (Python {v}, uv)", r.returncode == 0) and ok
     return ok
 
 
@@ -128,9 +179,19 @@ def main(argv: list[str] | None = None) -> int:
             " unit tests."
         )
     )
-    ap.add_argument("--full", action="store_true", help="same steps (the kit has no slower tier)")
-    ap.parse_args(argv)
-    results = [core_words(), compile_scripts(), ruff(), shellcheck(), unit_tests()]
+    ap.add_argument(
+        "--full", action="store_true", help="also run the unit tests on Python 3.13 (kit CI)"
+    )
+    ap.add_argument(
+        "--python",
+        action="append",
+        metavar="X.Y",
+        help="run the unit tests on this uv-managed Python instead (repeatable; default 3.12,"
+        " with --full 3.12 and 3.13)",
+    )
+    args = ap.parse_args(argv)
+    tests = unit_tests(args.python, args.full)
+    results = [core_words(), compile_scripts(), ruff(), shellcheck(), tests]
     if not all(results):
         print("check: failed", file=sys.stderr)
         return 1

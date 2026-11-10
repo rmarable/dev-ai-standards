@@ -3,8 +3,6 @@
 P001 Verification, "state_check names only the edit it warns on".
 """
 
-from __future__ import annotations
-
 import json
 import tempfile
 import unittest

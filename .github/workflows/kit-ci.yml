@@ -1,5 +1,6 @@
-# dev-ai-standards kit CI (G5): the kit's own scripts/check on Python 3.9 (stock macOS python3)
-# and 3.12. No path filter. Actions are pinned by full commit SHA.
+# dev-ai-standards kit CI (G5): the kit's own scripts/check, with the unit tests on uv-managed
+# Python 3.12 and 3.13 (uv required, operator decision 2026-11-10). No path filter. Actions are
+# pinned by full commit SHA.
 name: kit-ci
 
 on:
@@ -17,8 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.9 builds for ubuntu-24.04 in actions/setup-python: unverified until A4.
-        python: ["3.9", "3.12"]
+        python: ["3.12", "3.13"]
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (same pin as ecf CI)
@@ -26,12 +26,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0 (released 2026-10-22)
-        with:
-          python-version: ${{ matrix.python }}
-
-      - name: Set up uv (for uvx ruff)
+      # uv fetches each Python itself (scripts/check: uv run --python); no setup-python step.
+      - name: Set up uv
         # The SHA below is a placeholder (not known offline): set the release's full commit SHA.
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0 (same pin as ecf CI)
 
@@ -47,5 +43,6 @@ jobs:
             exit 1
           fi
 
+      # sh runs the script's front, which needs uv and starts it on uv-managed Python 3.12.
       - name: scripts/check
-        run: python ./scripts/check
+        run: sh ./scripts/check --python "${{ matrix.python }}"

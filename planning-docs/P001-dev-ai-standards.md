@@ -468,6 +468,17 @@ merges and its gate throughout (decision 1).
 
 ## Decisions
 
+Operator decisions 2026-11-10 (uv + multi-user round; detail in `P001-notes/a2/fix2.md`):
+1. uv required, Python 3.9 dropped: every kit entry point and hook runs on uv-managed Python 3.12
+   or later behind a POSIX `sh` front that prints the uv install hint when uv is missing;
+   `bin/bootstrap` checks the Xcode Command Line Tools, git and uv. Supersedes K1-14 (3.9 support).
+2. Multi-user readiness: `apply` writes `scripts/setup` and, if absent, `.github/CODEOWNERS`;
+   `AGENTS.md` has a project-owned `## People` section, and a scoped approval comes from an
+   approver's own message; everyone writes `ADR-NEW`/`OD-NEW`/`P-NEW` on branches and the real
+   number is assigned when merging to `main` (supersedes "Codex writes `P-NEW`" above);
+   `rules_check` fails on a placeholder left on `main` and on deleting or emptying `.githooks/*` or
+   `scripts/setup`.
+
 Operator decisions 2026-11-10 (final, G1 fixes):
 1. `gate-status` (G1-1): the script and its docs-only list are always read from the base branch
    (main), never the PR's branch. It checks the old and new path of every rename; copies,

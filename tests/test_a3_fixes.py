@@ -5,8 +5,6 @@ force push (K1-3), gate-status (K1-4, K1-6, K1-12, F1-2), and apply (K1-7, K1-8,
 K2-1 to K2-11). Throwaway repos only; fake `gh` where gate-status needs one.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import os
@@ -295,9 +293,7 @@ class GateStatusFixes(KitCase):
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("enforcement path: docs/standards/bin/gate-status", r.stdout)
         block = (self.repo / "AGENTS.md").read_text()
-        self.assertIn(
-            'show origin/main:docs/standards/bin/gate-status > "$TMPDIR/gate-status"', block
-        )
+        self.assertIn('show origin/main:docs/standards/bin/gate-status > "$d/gate-status"', block)
 
     def test_symlink_not_docs_only(self) -> None:  # K1-13 gap
         (self.repo / "planning-docs/link.md").symlink_to("a.md")

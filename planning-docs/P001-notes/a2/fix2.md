@@ -188,3 +188,126 @@ Results (A4 pilot fixes and doc rules together), 2026-11-10: `unittest discover 
 on Python 3.12.14 and on 3.9.6 (`/usr/bin/python3`), 15 new. `./scripts/check` passes (core.md 597
 of 600 words; Ruff format and check; ShellCheck 1 file; both test runs). Pyright on `checks tests`:
 0 errors, 0 warnings.
+
+## uv + multi-user round
+
+Operator decisions 2026-11-10: Change A (uv required, Python 3.9 dropped) and Change B (multi-user
+readiness). Recorded in P001 Decisions.
+
+### Change A: uv required
+
+- Design: each Python entry point is one file with a POSIX `sh` front. Line 1 is `#!/bin/sh`, then
+  PEP 723 inline metadata (`requires-python = ">=3.12"`), then a string that `sh` reads as code:
+  `""":"` (to sh, the `:` no-op), a `command -v uv` check that prints exactly "uv is required: brew
+  install uv (or see https://docs.astral.sh/uv/getting-started/installation/)" to stderr and exits
+  1, then `exec uv run --script "$0" "$@"`. To Python the same lines are the module docstring, and
+  the tool's own description follows inside it, so imports stay at the top (no E402).
+- Why this and not the alternatives: an `env -S uv run --script` shebang can't print the message
+  (env fails first); separate sh wrappers beside `.py` files double the files, break the
+  executable-bit-free copies in `docs/standards/` and every test that runs a tool with
+  `sys.executable`. One file works as `sh FILE` (hooks, launcher, symlinks in `~/.local/bin`), as
+  `./FILE`, and as `python FILE` (CI on an older base, tests). Kit copies lose their mode bits, so
+  hooks and the Claude Code hooks call `sh <file>`.
+- Covered: `bin/new-claude-project`, `bin/dev-ai-standards`, `bin/gate-status`, `scripts/check`, the
+  six `checks/*.py`, `templates/scripts/check`. A test checks the 11 fronts are identical.
+- Hooks: `.githooks/*` now `exec sh docs/standards/checks/<check>.py`; Claude Code `state_check`
+  commands use `sh`. Re-running `apply` rewrites the old `python3` hooks (`LEGACY_HOOKS`), drops the
+  old `python3` settings commands, and notes a `python3 docs/standards/checks/` line in a project's
+  own hook. The high-stakes recipe, codex add-on and skill call `sh` too.
+- CI: `rules-check.yml` keeps setup-python 3.12 and `python <file>`: the checks come from the base
+  commit, which may predate the front; `python` runs both forms, `sh` would fail on an old base.
+  `python.yml` unchanged (`uv run python scripts/check --full`). `kit-ci.yml`: setup-python removed,
+  matrix 3.12 and 3.13, `sh ./scripts/check --python <version>`.
+- `shell_lint` treats a file with the front as Python (not ShellCheck input); kit `scripts/check`
+  compiles front files, `sh -n` the plain sh ones (adds `bin/bootstrap`), and runs the unit tests
+  with `uv run --no-project --python 3.12`; `--full` runs 3.12 and 3.13 (operator decision
+  2026-11-10, same round); `--python X` (repeatable) picks the versions, as kit-ci's matrix does. `VIRTUAL_ENV` from `uv run --script` is dropped for
+  child runs (kit and project `scripts/check`).
+- 3.9 workarounds removed: `from __future__ import annotations` everywhere, the quoted
+  `MetaLookup` alias (now `type` statements), `typing.Callable`, the `tomllib` version guard; Ruff
+  target py312, pyright 3.12. `SYSTEM_PYTHON` and the `/usr/bin/python3` test run removed.
+- `bin/bootstrap` (POSIX sh): Xcode Command Line Tools (`xcode-select -p`, macOS only), git (the
+  `/usr/bin/git` stub doesn't count without the tools, and isn't run), uv; prints install commands;
+  offers `brew install uv` after y/N only with a terminal on stdin and stdout and no `CLAUDECODE`.
+  Installs nothing else. Exit 0 all present, else 1.
+- Tests: a fake `uv` (helpers `FAKE_UV`) is first on every test PATH: it runs `uv run --script FILE`
+  on the test's Python, so tests stay offline and never fill a uv cache in the throwaway HOME. The
+  launcher's "no uv warns" test is gone (the front stops first); replaced by the front tests.
+
+### Change B: multi-user readiness
+
+- `scripts/setup` (template, written once, executable): `sh docs/standards/bin/bootstrap` (stops
+  on failure), then `core.hooksPath .githooks` only when `.githooks/commit-msg` or `pre-commit`
+  calls `docs/standards/checks/`, the clone has no `core.hooksPath`, and `.git/hooks` has no
+  non-sample hook; otherwise it prints why and the command. `bin/bootstrap` is in `ALWAYS`.
+  `apply` also notes "run scripts/setup" when `.githooks/` holds kit hooks but the clone's
+  `core.hooksPath` is unset. `gate-status` and checks/README list `scripts/setup` as an
+  enforcement path.
+- People: template `## People` (before `## Project`): owner and approvers, both `{{owner}}`.
+  Owner: `--owner`, else `NEW_CLAUDE_PROJECT_OWNER`, else `git config user.name`, else
+  `operator`, with a note for the last two. An existing `AGENTS.md` without `## People` gets the
+  section (project text, so it belongs in the second PR of an upgrade, like kit rows). The
+  high-stakes "Approvers" line in `## Project` was removed (People holds it).
+- core.md Scoped approval: "an approver's own message (`AGENTS.md` People) ... agents act for
+  whoever runs the session". 600 words by `wc -w`; cut words, not rules: "Write terse" to "Terse",
+  "the affected" to "affected", "right before" to "just before", the Covers line, "and before every
+  merge ask" to "and every merge ask", "(the env default doesn't reach them)" to "(env defaults
+  don't reach them)". Other "operator" mentions in core (main merges, ruleset) were not asked for
+  and are unchanged.
+- Numbering: planning add-on (always-loaded block and Naming), codex add-on (placeholder line and
+  pick-up step 3), task brief and ADR 0001 templates. `rules_check`: on `main` only, a placeholder
+  (`ADR|OD|P-NEW`, optional `-<n>`) in a path or in text of a tracked or untracked file fails.
+  Skipped: `docs/standards/**`, the two fixed rules, kit blocks, inline code spans, and in Markdown
+  fenced code and HTML comments (quotations). Branch: `--branch`, else in GitHub Actions the pushed
+  branch (a pull request is never main), else `git symbolic-ref`. So a PR passes and the push to
+  `main` fails: the merger assigns numbers on the branch first.
+- `rules_check` also fails when a `.githooks/*` file or `scripts/setup` that the base commit has is
+  deleted or emptied.
+- CODEOWNERS: `templates/CODEOWNERS` (not copied into `docs/standards/`), written to
+  `.github/CODEOWNERS` only when absent: `* @<owner>`, commented out when the owner is the
+  `operator` default or not login-shaped; a commented two-approver example.
+- README: prerequisites, `bin/bootstrap`, "Joining a project", the paid-plan Limits sentence, the
+  new files in the table; the Codex section folded into the `--codex` option (its pilot date and
+  `codex exec` stdin note stay in docs/reference.md). docs/reference.md: prerequisites, bootstrap,
+  Joining a project, approvals, numbers, `--owner` and `NEW_CLAUDE_PROJECT_OWNER`, files written,
+  hooks. CHANGELOG lines added.
+
+### Open points
+
+- The high-stakes recipe now runs the base copy of `gate-status` with `sh`. During the upgrade PR
+  that introduces the front, `origin/main` still has the plain-Python copy, and `sh` on it fails
+  with a syntax error (loud, not silent); use `uv run --python 3.12 python "$TMPDIR/gate-status"`
+  for that one PR.
+- Not run: real CI on GitHub (kit-ci, rules-check, python.yml), a vanilla Mac without uv (simulated
+  with PATH=/usr/bin:/bin), and the interactive `brew install uv` branch of bootstrap.
+- README is 782 words (target about 750).
+
+Results, 2026-11-10: `uv run --python 3.12 python -m unittest discover -s tests` 186 pass (3.12.14),
+the same on 3.13.15, 186 pass (was 156; 31 new in `tests/test_a5_fixes.py`, 1 removed). `./scripts/check`
+all passed (core.md 600 of 600 words; Ruff format and check; ShellCheck 3 files; tests on 3.12
+and 3.13 through uv). Pyright on `checks tests`: 0 errors, 0 warnings. `uvx ruff check` and
+`uvx ruff format --check`: clean on `.` and on the extensionless bin/ and scripts/ tools.
+
+Follow-up, same day (operator decision 2026-11-10): `scripts/check` runs the unit tests on 3.12
+only; `--full` runs 3.12 and 3.13; kit-ci keeps its matrix (`--python <version>`). The 3.13 suite
+was not re-run for this change (186 pass above); the final `./scripts/check` (3.12) result follows.
+Final `./scripts/check`: all passed, 186 tests on 3.12 only (no 3.13 run without `--full`); pyright 0 errors; Ruff clean.
+
+## U1 fixes
+
+Operator-approved 2026-11-10 (findings: a3/out/U1.md). New tests in `tests/test_u1_fixes.py`.
+
+- U1-1 HIGH: docs rule plus check. checks/README "Kit upgrades", docs/reference.md step 4, README "Updating", the dev-ai-standards skill step 6, and CHANGELOG all say: when a release changes how scripts or hooks start, the upgrade PR may include `.githooks/*` and `scripts/check`. `rules_check.in_upgrade_set` accepts them (files directly in `.githooks/`, and `scripts/check`) only inside a valid upgrade, so only with a newer Standards version. Tests: upgrade with both passes; same version fails; `.githooks/lib/x.sh` refused. No apply change (operator: no code beyond rules_check).
+- U1-2 MED: the recipe is now `d=$(mktemp -d)` ... `uv run --no-project --python 3.12 python "$d/gate-status"` in high-stakes (both places) and checks/README. `--no-project` was added so uv doesn't sync, or refuse on, a project's own requires-python (a deviation from the brief's wording). Text test: no `sh $TMPDIR|$d/gate-status` in docs or skills, recipe present.
+- U1-3 MED: fails only in a change to the default branch (PR whose `GITHUB_BASE_REF` is it, push to it, or a local check on it). Default: `--default-branch`, the workflow's `DEFAULT_BRANCH` env (set in templates/ci/rules-check.yml; an env var so an older base copy ignores it), `origin/HEAD`, else the one of main/master that exists; unknown means skipped, with a line saying so. Scans tracked files only: names under `docs/adr/` and `planning-docs/`, the first line of Markdown there, and definition lines (`- OD-NEW: ...`, defined in addons/planning.md "Numbers"). Code spans of any backtick count are stripped; indented code isn't matched. Tests: AGENTS.md prose, CHANGELOG, double-backtick, indented, .py mentions pass; PR with `docs/adr/NEW-foo.md` fails; feature branch, push to a feature branch and PR into another branch pass; push to default fails; untracked not scanned; `master` repo, CI and clone (`origin/HEAD`).
+- U1-4 MED: `rules_check.py --people` prints Owner and Approvers from `origin/<default>` (else `<default>`) `:AGENTS.md`, never the working tree. A change to `## People` vs the merge-base warns: "People changed: needs the owner's approval (merge by the owner listed on <default>)", plus a `::warning` annotation in Actions; never fails. core.md Scoped approval: "(`AGENTS.md` People on `main`)". The templates/AGENTS.md People text and the high-stakes Approvers section were updated. codex add-on unchanged (AGENTS.md is already an enforcement path that fails on `codex/*`). CODEOWNERS fixes not done (not in the approved list). Tests: a committed and an uncommitted branch edit are not honoured; the PR warns and passes; no change, no warning.
+- U1-5 LOW: the front tries `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin` and `/usr/local/bin` when `PATH` lacks uv. `DEV_AI_STANDARDS_NO_UV_SEARCH` turns that off (tests need it on machines that have Homebrew uv; documented in reference). All 11 fronts are still identical. Test: uv in `$HOME/.local/bin` with `PATH=/usr/bin:/bin`.
+- U1-6 LOW: the front runs `unset UV_PYTHON`. Test: `UV_PYTHON=3.9` doesn't reach uv.
+- U1-7 LOW: docs only (checks/README, reference: uv needs a writable cache, `UV_CACHE_DIR`). `~/.cache/uv` was writable from this Claude Code session (2026-11-10). Whether a sandboxed project session allows it is still unverified, so there is no python3 fallback.
+- U1-8 LOW: setup_removals also fails on a lost executable bit (base mode 100755) and on a file that no longer mentions `docs/standards/checks/` when the base's copy does. Tests: `chmod -x` and an `exit 0` body.
+- U1-9 LOW: core "Covers writes and commits on the step's own branch, and pushing it to the private remote"; "Model map and more:"; core.md 600 words. The People template defines "the operator" as the Owner and the Approvers' roles; the high-stakes Approvers section points to People.
+- U1-10 LOW: README Limits has paid plan "(Team or Pro; unverified)", "use public repos" dropped, and "People is a policy, not a login". The approvals sentence says "on `main`". The numbering sentence is now only in reference (with its terms explained). Cuts 1-4 done, plus more to reach 750. Banned-word grep clean.
+- U1-11 LOW: setup ends "setup: done, git hooks NOT on (see above)" when it left hooks off, and the hint says the command stops the other hooks. Tests for both cases, and hooks on still ends "setup: done".
+- Skipped: U1-1's apply note or rewrite for a `#!/usr/bin/env python3` `scripts/check`, and the settings-command swap in the upgrade set (operator: docs rule only); U1-4's CODEOWNERS changes (not approved).
+
+Results, 2026-11-10: `./scripts/check` all passed (216 tests on 3.12, core.md 600 of 600, Ruff, ShellCheck 3 files). `uv run --no-project --python 3.13 python -m unittest discover -s tests`: 216 pass (3.13.15; was 186). Pyright `checks tests`: 0 errors, 0 warnings. `uvx ruff check` and `format --check`: clean on `.` and on the Python tools in bin/ and scripts/check (bin/bootstrap is sh). `wc -w`: core.md 600, README.md 750.

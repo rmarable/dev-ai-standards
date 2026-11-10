@@ -6,8 +6,22 @@ heading becomes the tag and its date.
 
 ## v0.1.0 (not yet tagged)
 
+### Changed
+
+- Number placeholders fail in a pull request into, or a push to, the default branch, only in ADR and plan names, their ID lines and decision definitions (U1-3).
+- A kit upgrade that changes how scripts start may include `.githooks/*` and `scripts/check`, accepted only with a newer Standards version (U1-1).
+- This release changes how scripts start: put the rewritten `.githooks/*`, and `scripts/check` edited by hand to run through uv, in the upgrade PR (U1-1).
+- The high-stakes gate-status recipe runs the base copy with `uv run --no-project --python 3.12 python`, never `sh` (U1-2).
+- Kit scripts look for uv in its usual install folders when `PATH` lacks it, and ignore `UV_PYTHON` (U1-5, U1-6).
+- `scripts/setup` ends "setup: done, git hooks NOT on" when it left them off, and says the suggested command stops other hooks (U1-11).
+- uv is required: every kit tool and hook starts with an `sh` front that needs uv and runs on Python 3.12 or later; Python 3.9 is no longer supported (operator decision 2026-11-10).
+- A scoped approval comes from an approver's own message (`AGENTS.md` People); agents act for whoever runs the session (operator decision 2026-11-10).
+- Everyone, not only Codex, writes `-NEW` number placeholders on branches; real numbers are assigned when merging to `main` (operator decision 2026-11-10).
+
 ### Security
 
+- People counts only from the default branch (`rules_check.py --people`); rules-check warns on a change to People (U1-4).
+- rules-check fails a change that removes the executable bit of a hook or `scripts/setup`, or drops its kit check calls (U1-8).
 - rules-check: a forced push to the default branch fails; any other branch compares with its merge-base with the default branch (F1-1).
 - gate-status: `--no-fetch`, `--list` and `--script-path` removed; it always fetches and checks the PR's base (F1-2).
 - secret_scan parses diffs by hunk and prints file and line only, never line content (F1-4).
@@ -18,6 +32,10 @@ heading becomes the tag and its date.
 
 ### Added
 
+- `bin/bootstrap` checks for the Xcode Command Line Tools, git and uv; it offers `brew install uv` only at a terminal outside Claude Code (operator decision 2026-11-10).
+- `apply` writes `scripts/setup` (bootstrap, then `core.hooksPath .githooks` when safe) and, if absent, `.github/CODEOWNERS` (operator decision 2026-11-10).
+- `AGENTS.md` gets a `## People` section, owner and approvers by GitHub login, filled from `NEW_CLAUDE_PROJECT_OWNER` or `git config user.name` (operator decision 2026-11-10).
+- rules_check fails on `ADR-NEW`, `OD-NEW` or `P-NEW` merging into the default branch, and on a change deleting or emptying `.githooks/*` or `scripts/setup` (operator decision 2026-11-10).
 - `refs/user-docs.md` and `.claude/rules/user-docs.md` (loaded for README.md and docs/**), plus a read-before row: rules for user-facing docs (doc rules).
 - `apply --stack python` writes `pyproject.toml` when absent; the launcher runs `uv lock` before the first commit, so python.yml passes (A4 pilot).
 - Python-stack `scripts/check` passes on a fresh project: pytest runs once tests exist, else "no tests yet"; other and iac still fail until edited (A4 pilot).

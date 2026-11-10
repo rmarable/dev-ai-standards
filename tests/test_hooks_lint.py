@@ -2,10 +2,9 @@
 (ShellCheck), operator decisions 2026-11-10, plus the kit's scripts/check file list (K1-14).
 
 Secret fixtures are built at runtime from obviously fake parts, so no key-shaped literal sits in
-the repo. The hook runs with a PATH holding only fakes, git and a logging python3.
+the repo. The hook runs with a PATH holding only fakes, git, sh, a logging python3 and a logging
+fake uv that runs the sh front's `uv run --script` on the test's Python.
 """
-
-from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
@@ -16,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from helpers import OUT, commit, env, git, init_repo, msg, py
+from helpers import FAKE_UV, OUT, commit, env, git, init_repo, msg, py
 from test_apply_rules import KitCase
 
 SCAN = OUT / "checks" / "secret_scan.py"
@@ -91,6 +90,13 @@ class PreCommitBase(KitCase):
         gitexe = shutil.which("git")
         assert gitexe
         (self.fakebin / "git").symlink_to(gitexe)
+        (self.fakebin / "sh").symlink_to("/bin/sh")
+        write_exe(
+            self.fakebin / "uv",
+            FAKE_UV.replace(
+                "#!/bin/sh\n", '#!/bin/sh\necho "uv $*" >> "$FAKE_LOG_DIR/calls.log"\n', 1
+            ),
+        )
         write_exe(
             self.fakebin / "python3",
             f'#!/bin/sh\necho "python3 $*" >> "$FAKE_LOG_DIR/calls.log"\nexec {sys.executable}'
@@ -142,7 +148,7 @@ class PreCommit(PreCommitBase):
         out = self.apply_ok(repo)
         self.assertIn(".git/hooks/ has hooks (pre-commit)", out)
         self.assertIn(
-            "to .git/hooks/pre-commit: python3 docs/standards/checks/pre_commit.py || exit 1", out
+            "to .git/hooks/pre-commit: sh docs/standards/checks/pre_commit.py || exit 1", out
         )
         self.assertFalse((repo / ".githooks").exists())
         self.assertEqual(own.read_text(), "#!/bin/sh\nexit 0\n")
@@ -242,7 +248,7 @@ class PreCommit(PreCommitBase):
         )
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         calls = self.calls()
-        self.assertIn("python3 docs/standards/checks/pre_commit.py", calls)
+        self.assertIn("uv run --script docs/standards/checks/pre_commit.py", calls)
         self.assertNotIn("unittest", calls)
         self.assertNotIn("pytest", calls)
         self.assertFalse(Path(f"{marker}-check").exists())
@@ -396,4 +402,10 @@ class KitCheckScript(KitCase):
         ):
             self.assertIn(rel, files)
         self.assertFalse(any(f.startswith("templates/") for f in files))
-        self.assertEqual(str(mod.SYSTEM_PYTHON), "/usr/bin/python3")
+        self.assertIn("bin/bootstrap", mod.SCRIPTS)
+        self.assertNotIn("bin/bootstrap", files)
+        self.assertEqual(mod.DEFAULT_PYTHON, "3.12")
+        self.assertEqual(mod.FULL_PYTHONS, ("3.12", "3.13"))
+        self.assertEqual(mod.pythons(None, False), ["3.12"])
+        self.assertEqual(mod.pythons(None, True), ["3.12", "3.13"])
+        self.assertEqual(mod.pythons(["3.13"], False), ["3.13"])

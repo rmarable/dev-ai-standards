@@ -4,19 +4,46 @@ The kit is a copy of this tree, so tests exercise the real templates and add-ons
 with no user or system config.
 """
 
-from __future__ import annotations
-
 import os
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 OUT = Path(__file__).resolve().parent.parent
 CLAUDE_TRAILER = "Co-Authored-By: Claude <noreply@anthropic.com>"
 CODEX_TRAILER = "Co-Authored-By: Codex <noreply@openai.com>"
 ZERO = "0" * 40
+
+
+# The kit's sh front runs `uv run --script FILE ARGS`. Tests put this fake `uv` first on PATH so
+# hooks and tools run on the test's own Python, offline, with no uv cache in the throwaway HOME.
+# It handles only that form; anything else exits 2.
+UV_FRONT_ARGS = "run --script"
+FAKE_UV = f"""#!/bin/sh
+if [ "$1" = run ]; then
+  shift
+  while [ $# -gt 0 ] && [ "$1" != --script ]; do shift; done
+  if [ "$1" = --script ]; then
+    shift
+    exec {sys.executable} "$@"
+  fi
+fi
+echo "fake uv: unsupported: $*" >&2
+exit 2
+"""
+_fake_uv_dir: list[Path] = []
+
+
+def fake_uv_dir() -> Path:
+    """A folder holding only the fake `uv` above, made once per test process."""
+    if not _fake_uv_dir:
+        d = Path(tempfile.mkdtemp(prefix="kit-fake-uv-"))
+        write_exe(d / "uv", FAKE_UV)
+        _fake_uv_dir.append(d)
+    return _fake_uv_dir[0]
 
 
 def env(home: Path) -> dict[str, str]:
@@ -31,6 +58,19 @@ def env(home: Path) -> dict[str, str]:
         GIT_COMMITTER_EMAIL="test@example.invalid",
     )
     e.pop("CLAUDECODE", None)
+    for k in (
+        "NEW_CLAUDE_PROJECT_OWNER",
+        "VIRTUAL_ENV",
+        "GITHUB_EVENT_NAME",
+        "GITHUB_REF",
+        "GITHUB_BASE_REF",
+        "GITHUB_ACTIONS",
+        "DEFAULT_BRANCH",
+        "UV_PYTHON",
+        "DEV_AI_STANDARDS_NO_UV_SEARCH",
+    ):
+        e.pop(k, None)
+    e["PATH"] = f"{fake_uv_dir()}{os.pathsep}{e.get('PATH', '')}"
     return e
 
 

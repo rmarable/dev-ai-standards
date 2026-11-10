@@ -1,0 +1,9 @@
+# Code owners: GitHub asks these people to review changes to matching paths. Project-owned;
+# written once by dev-ai-standards apply. Making their review required needs branch protection,
+# which private repos get only on a paid GitHub plan (Team or Pro).
+{{codeowners_rule}}
+
+# Example: two approvers for the kit's rules and the CI workflows (later lines win).
+# /AGENTS.md @owner-login @second-login
+# /docs/standards/ @owner-login @second-login
+# /.github/ @owner-login @second-login

@@ -4,8 +4,6 @@ P001 Verification, "A second trailer fails trailer_check in hook and CI ..." and
 exemption cases. Throwaway git repos in a temp dir.
 """
 
-from __future__ import annotations
-
 import json
 import tempfile
 import unittest

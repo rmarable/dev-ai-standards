@@ -1,0 +1,53 @@
+#!/bin/sh
+# scripts/setup: run once after cloning. Written once by dev-ai-standards apply; project-owned
+# from then on. It runs the kit's bootstrap check (Xcode Command Line Tools, git, uv), then turns
+# on this project's git hooks: it sets core.hooksPath to .githooks only when .githooks/ holds the
+# kit's hooks and this clone has no other hooks set up. It prints what it did.
+
+top=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "setup: not inside a git clone"
+  exit 1
+}
+cd "$top" || exit 1
+
+if ! sh docs/standards/bin/bootstrap; then
+  echo "setup: stopped: install what bootstrap lists, then run scripts/setup again"
+  exit 1
+fi
+
+current=$(git config --get core.hooksPath)
+hooks_dir=$(git rev-parse --git-path hooks)
+off=""
+if ! grep -qs 'docs/standards/checks/' .githooks/commit-msg .githooks/pre-commit; then
+  echo "setup: hooks: this repo doesn't use the kit's git hooks (.githooks/); nothing changed"
+elif [ "$current" = .githooks ]; then
+  echo "setup: hooks: already on (core.hooksPath is .githooks)"
+elif [ -n "$current" ]; then
+  echo "setup: hooks: this clone uses core.hooksPath '$current'; left as is."
+  echo "setup: to use the project's hooks instead: git config core.hooksPath .githooks"
+  echo "setup: (that stops the hooks in '$current' from running)"
+  off=1
+else
+  own=""
+  for h in "$hooks_dir"/*; do
+    [ -f "$h" ] || continue
+    case $h in *.sample) continue ;; esac
+    own="$own ${h##*/}"
+  done
+  if [ -n "$own" ]; then
+    echo "setup: hooks: $hooks_dir/ has hooks of its own:$own; core.hooksPath not set."
+    echo "setup: to use the project's hooks instead: git config core.hooksPath .githooks"
+    echo "setup: (that stops these hooks in $hooks_dir/ from running:$own)"
+    off=1
+  elif git config core.hooksPath .githooks; then
+    echo "setup: hooks: set core.hooksPath to .githooks (commit-msg and pre-commit checks)"
+  else
+    echo "setup: hooks: 'git config core.hooksPath .githooks' failed"
+    exit 1
+  fi
+fi
+if [ -n "$off" ]; then
+  echo "setup: done, git hooks NOT on (see above)"
+else
+  echo "setup: done"
+fi

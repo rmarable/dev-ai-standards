@@ -2,13 +2,12 @@
 scripts/check passes (no tests yet); other stacks still fail until their steps are added (K2-2).
 """
 
-from __future__ import annotations
-
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 from helpers import commit, env, init_repo, msg, write_exe
@@ -33,11 +32,8 @@ class PyprojectTemplate(KitCase):
         self.assertIn('testpaths = ["tests"]', text)
         self.assertNotIn("[build-system]", text)
         self.assertFalse((p / "docs/standards/templates/pyproject.toml").exists())
-        if sys.version_info >= (3, 11):
-            import tomllib  # noqa: PLC0415 (3.11+ only; kit code runs on 3.9)
-
-            data = tomllib.loads(text)
-            self.assertEqual(data["project"]["name"], "my-cool-project")
+        data = tomllib.loads(text)
+        self.assertEqual(data["project"]["name"], "my-cool-project")
         # The test CI's matrix minimum matches requires-python on the next apply.
         self.apply_ok(p, "--stack", "python")
         wf = (p / ".github/workflows/python.yml").read_text()
